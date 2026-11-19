@@ -30,7 +30,7 @@ function run() {
   const snapshot_sha256 = createHash('sha256').update(bytes).digest('hex');
   const radar = { ...buildRadar(parseSnapshot(bytes.toString('utf8'))), snapshot_sha256 };
   const { rows, counts, as_of, source, fit, validation, exclusions, plan_audit } = radar;
-  const board = json({ as_of, source, snapshot_sha256, counts, fit, validation, exclusions, plan_audit,
+  const board = json({ as_of, source, snapshot_sha256, counts, fit, market_median_change_7d: radar.market_median_change_7d, validation, exclusions, plan_audit,
     odds_cohort: radar.odds_cohort, category_premiums: radar.category_premiums, econ_defaults: radar.econ_defaults, rows });
   if (Buffer.byteLength(board) > 8 * 1024 * 1024) throw new Error('board.json exceeds the 8 MiB gate cap.');
   for (const { slug, farm_steps } of rows) {

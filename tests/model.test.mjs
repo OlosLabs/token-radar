@@ -182,9 +182,9 @@ test('same-fold residuals independently reproduce held-out estimates and error s
   const v = radar.validation;
   assert.deepEqual(v.residuals.map(f => f.slug), radar.peers.map(p => p.slug));
   for (const [i, peer] of radar.peers.entries()) {
-    const train = radar.peers.filter((_, j) => i !== j), full = fitCurve(train), simple = fitCurve(train, false);
+    const train = radar.peers.filter((_, j) => i !== j), full = fitCurve(train, true, radar.market_median_change_7d), simple = fitCurve(train, false, radar.market_median_change_7d);
     const y = Math.log(peer.mcap_usd), x = Math.log(peer.tvl_usd / 100000000);
-    const g = clamp(peer.change_7d ?? 0, -30, 30) / 30;
+    const g = clamp((peer.change_7d ?? radar.market_median_change_7d) - radar.market_median_change_7d, -30, 30) / 30;
     assert.ok(Math.abs(v.residuals[i].growth - (y - full.intercept - full.slope*x - full.momentum*g)) < 1e-12);
     assert.ok(Math.abs(v.residuals[i].age - (y - simple.intercept - simple.slope*x - Math.log(maturity(trackingDays(peer, snapshot.as_of))))) < 1e-12);
   }
@@ -289,7 +289,7 @@ test('oddsFor interpolates monotonically, uses the disclosed prior, and deposits
   assert.ok(ROUTES.Chain.infraSkip);
   for (const row of radar.rows) {
     assert.ok(row.plan.econ.deposit <= row.tvl_usd * 0.02, row.slug);
-    assert.equal(row.plan.econ.reviewDate, '2026-12-26', row.slug);
+    assert.equal(row.plan.econ.reviewDate, '2027-02-06', row.slug);
     assert.equal(row.plan.bps, row.plan.econ.bps, row.slug);
     assert.ok(Number.isFinite(row.plan.fixed) && row.plan.fixed >= 0, row.slug);
   }

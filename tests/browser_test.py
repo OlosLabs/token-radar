@@ -49,12 +49,12 @@ def main():
             page.keyboard.press('Enter')
             assert page.locator('#board').evaluate('(e)=>e===document.activeElement')
             page.evaluate('window.scrollTo(0,0)')
-            page.screenshot(path=str(ROOT/'screenshots/1-board.jpg'), type='jpeg', quality=86)
+            page.screenshot(path=str(ROOT/'screenshots/1-board.jpg'), type='jpeg', quality=72)
             checks.append(f'desktop board, watchlist coverage, keyboard skip and {complete_rows} complete rows at 1440x900')
             page.locator('[data-open="steakhouse-financial"]').click()
             assert page.locator('#dossier').evaluate('(d)=>d.open')
             assert page.locator('#dossier-title').inner_text() == 'Steakhouse Financial'
-            page.screenshot(path=str(ROOT/'screenshots/2-detail.jpg'), type='jpeg', quality=86)
+            page.screenshot(path=str(ROOT/'screenshots/2-detail.jpg'), type='jpeg', quality=72)
             page.keyboard.press('Escape')
             assert not page.locator('#dossier').evaluate('(d)=>d.open')
             assert page.locator('[data-open="steakhouse-financial"]').evaluate('(e)=>e===document.activeElement')
@@ -110,7 +110,7 @@ def main():
             assert 'board.json' in page.locator('#audit').inner_text()
             assert '40/40' in page.locator('#audit').inner_text()
             page.evaluate('window.scrollTo(0,0)')
-            page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=86)
+            page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=72)
             checks.append('empty state, clear, sector filter, verdict filter, net sort and self-audit strip')
             for width in [390, 320, 768]:
                 page.set_viewport_size({'width':width,'height':844})

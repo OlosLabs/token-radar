@@ -81,26 +81,32 @@ export function quantile(values: number[], q: number) {
 
 export const trackingDays = (p: Protocol, asOf: string) => p.listed_at === null ? null : (Date.parse(asOf) - Date.parse(p.listed_at)) / DAY;
 export const maturity = (days: number | null) => 0.82 + 0.18 * clamp((days ?? 730) / 1460, 0, 1);
-export const growthInput = (p: Protocol) => clamp(p.change_7d ?? 0, -30, 30) / 30;
+// Relative momentum: the protocol's weekly move minus the market's median
+// week, so a -2% week in a -8% market reads as strength, not weakness.
+export const marketMedianChange = (protocols: Protocol[]) => {
+  const xs = protocols.map(p => p.change_7d).filter((x): x is number => x !== null);
+  return xs.length ? quantile(xs, 0.5) : 0;
+};
+export const growthInput = (p: Protocol, median = 0) => clamp((p.change_7d ?? median) - median, -30, 30) / 30;
 const scale = (p: Protocol) => Math.log(p.tvl_usd / 100_000_000);
 const capLog = (p: Protocol) => Math.log(p.mcap_usd!);
 
 // Ridge least squares on centered log TVL and clipped growth. Keep the growth
 // coefficient bounded, then re-solve intercept and slope with that coefficient.
-export function fitCurve(peers: Protocol[], growth = true) {
+export function fitCurve(peers: Protocol[], growth = true, median = 0) {
   const n = peers.length;
   if (n < 2) throw new Error('Need at least two observations per refit.');
   const mean = (fn: (p: Protocol) => number) => peers.reduce((s, p) => s + fn(p), 0) / n;
-  const mx = mean(scale), mg = mean(growthInput), my = mean(capLog);
+  const mx = mean(scale), mg = mean(p => growthInput(p, median)), my = mean(capLog);
   let xx = 0, gg = 0, xg = 0, xy = 0, gy = 0;
   for (const p of peers) {
-    const x = scale(p) - mx, g = growthInput(p) - mg, y = capLog(p) - my;
+    const x = scale(p) - mx, g = growthInput(p, median) - mg, y = capLog(p) - my;
     xx += x * x; gg += g * g; xg += x * g; xy += x * y; gy += g * y;
   }
   const a = xx + 2, d = gg + 12;
   const momentum = growth ? clamp((a * gy - xg * xy) / (a * d - xg * xg), -0.25, 0.25) : 0;
   const slope = clamp((xy - xg * momentum) / a, 0, 1.5);
-  return { intercept: my - slope * mx - momentum * mg, slope, momentum };
+  return { intercept: my - slope * mx - momentum * mg, slope, momentum, median };
 }
 
 export type Fit = ReturnType<typeof fitCurve>;
@@ -116,7 +122,7 @@ export function categoryPremiums(peers: Protocol[], fit: Fit): Map<string, Premi
   const gaps = new Map<string, number[]>();
   for (const p of peers) {
     if (!p.category) continue;
-    const gap = capLog(p) - Math.log(curveValue(p.tvl_usd, fit)) - fit.momentum * growthInput(p);
+    const gap = capLog(p) - Math.log(curveValue(p.tvl_usd, fit)) - fit.momentum * growthInput(p, fit.median);
     if (!gaps.has(p.category)) gaps.set(p.category, []);
     gaps.get(p.category)!.push(gap);
   }
@@ -134,21 +140,21 @@ export const premiumFor = (premiums: Map<string, Premium>, category: string | nu
 export function price(p: Protocol, asOf: string, fit: Fit, premiums?: Map<string, Premium>) {
   const age_days = trackingDays(p, asOf);
   const curve = curveValue(p.tvl_usd, fit);
-  const growth = Math.exp(fit.momentum * growthInput(p));
+  const growth = Math.exp(fit.momentum * growthInput(p, fit.median));
   const age = maturity(age_days);
   const premium = premiums ? premiumFor(premiums, p.category).factor : 1;
   const value = clamp(Math.round(curve * growth * age * premium), 1, MAX_VALUE);
   return { value, curve, growth, age, age_days, premium };
 }
 
-function validate(peers: Protocol[], asOf: string) {
+function validate(peers: Protocol[], asOf: string, median: number) {
   const variants = ['baseline', 'tvl', 'growth', 'age', 'full'] as const;
   const folds = peers.map((p, i) => {
     const train = peers.filter((_, j) => i !== j);
-    const fitted = fitCurve(train);
+    const fitted = fitCurve(train, true, median);
     const x = scale(p);
-    const curve = fitted.intercept + fitted.slope * x + fitted.momentum * growthInput(p);
-    const simple = fitCurve(train, false);
+    const curve = fitted.intercept + fitted.slope * x + fitted.momentum * growthInput(p, median);
+    const simple = fitCurve(train, false, median);
     const y = capLog(p);
     return {
       slug: p.slug,
@@ -188,17 +194,17 @@ function validate(peers: Protocol[], asOf: string) {
 // multiplicative miss against a flat log mcap/TVL multiple fitted on the same
 // training half. A genuine out-of-sample test in tracking time, though still
 // one snapshot date — not a historical price backtest.
-export function walkForward(peers: Protocol[], asOf: string) {
+export function walkForward(peers: Protocol[], asOf: string, median: number) {
   const dated = peers.filter(p => p.listed_at !== null)
     .sort((a, b) => lexical(a.listed_at!, b.listed_at!) || lexical(a.slug, b.slug));
   if (dated.length < 10) return null;
   const cut = Math.floor(dated.length / 2);
   const train = dated.slice(0, cut), test = dated.slice(cut);
-  const fitted = fitCurve(train);
+  const fitted = fitCurve(train, true, median);
   const flat = quantile(train.map(t => capLog(t) - Math.log(t.tvl_usd)), 0.5);
   const errors = test.map(p => ({
     slug: p.slug,
-    model: capLog(p) - Math.log(curveValue(p.tvl_usd, fitted)) - fitted.momentum * growthInput(p) - Math.log(maturity(trackingDays(p, asOf))),
+    model: capLog(p) - Math.log(curveValue(p.tvl_usd, fitted)) - fitted.momentum * growthInput(p, median) - Math.log(maturity(trackingDays(p, asOf))),
     baseline: capLog(p) - Math.log(p.tvl_usd) - flat,
   }));
   const miss = (key: 'model' | 'baseline') => Math.exp(quantile(errors.map(e => Math.abs(e[key])), 0.5));
@@ -229,8 +235,9 @@ export function buildRadar(snapshot: Snapshot) {
     return true;
   }).sort((a, b) => lexical(a.slug, b.slug));
   if (peers.length < 5) throw new Error('Need at least five independent token records with market caps.');
-  const fit = fitCurve(peers);
-  const simpleFit = fitCurve(peers, false);
+  const market_median_change_7d = marketMedianChange(protocols);
+  const fit = fitCurve(peers, true, market_median_change_7d);
+  const simpleFit = fitCurve(peers, false, market_median_change_7d);
   const premiums = categoryPremiums(peers, fit);
   const odds_cohort = cohortOdds(protocols, as_of);
   // Farm economics prices the conditional slice (value if it launches); the
@@ -239,8 +246,8 @@ export function buildRadar(snapshot: Snapshot) {
   const econFor = (p: Protocol, conditionalValue: number) => farmEconomics(p, { asOf: as_of, impliedValue: conditionalValue, odds: odds_cohort.oddsFor(trackingDays(p, as_of)) });
   // Validate plans for every source record, including excluded products.
   const sourcePlans = new Map(protocols.map(p => [p.slug, farmPlan(p, trackingDays(p, as_of), econFor(p, price(p, as_of, fit, premiums).value))]));
-  const validation = validate(peers, as_of);
-  const walk_forward = walkForward(peers, as_of);
+  const validation = validate(peers, as_of, market_median_change_7d);
+  const walk_forward = walkForward(peers, as_of, market_median_change_7d);
   const limits = [Math.min(...peers.map(p => p.tvl_usd)), Math.max(...peers.map(p => p.tvl_usd))];
   const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery');
   const rows = candidates.map(({ p, status }) => {
@@ -278,7 +285,7 @@ export function buildRadar(snapshot: Snapshot) {
     tvl_only_value: r.valuation_sensitivity.tvl_only }));
   const exclusions = classified.filter(({ p }) => !ranked.has(p.slug)).map(({ p, status }) => ({ ...p, reason: status }));
   return {
-    as_of, source, floor_usd, rows, peers, fit, validation: { ...validation, top_rank_sensitivity: rankSensitivity, walk_forward }, exclusions, plan_audit,
+    as_of, source, floor_usd, rows, peers, fit, market_median_change_7d, validation: { ...validation, top_rank_sensitivity: rankSensitivity, walk_forward }, exclusions, plan_audit,
     odds_cohort: { buckets: odds_cohort.buckets, prior: odds_cohort.prior, disclosure: odds_cohort.disclosure },
     category_premiums: [...premiums.entries()].map(([category, v]) => ({ category, ...v })),
     econ_defaults: ECON_DEFAULTS,

@@ -22,6 +22,10 @@
   const chosen = new Set();
   const pageSize = 10;
   let page = 0, active = rows[0], scenario = { ...defaults };
+  const farmRows = rows.filter(r => r.verdict === 'FARM');
+  const portfolioNet = farmRows.reduce((s, r) => s + r.plan.econ.netAfterYield, 0);
+  const portfolioMin = farmRows.reduce((s, r) => s + r.plan.econ.minutes, 0);
+  const bestHour = rows.reduce((b, r) => (r.plan.econ.netPerHour ?? -Infinity) > (b?.plan.econ.netPerHour ?? -Infinity) ? r : b, null);
   let previousFocus;
 
   function renderChart() {
@@ -58,14 +62,15 @@
 
   function renderEvidence() {
     $('edition').textContent = `${data.as_of} UTC`;
-    $('coverage').innerHTML = [[`${counts.covered}/${counts.watch}`, 'Watchlist covered'], [counts.farm, 'Farm verdicts'], [counts.total, 'Snapshot records']]
+    $('coverage').innerHTML = [[`${counts.covered}/${counts.watch}`, 'Watchlist covered'], [counts.farm, 'FARM verdicts'], [counts.total, 'Snapshot records']]
       .map(([value, label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join('');
+    $('farm-now').innerHTML = `<b>Farm now:</b> ${farmRows.slice().sort((a,b)=>b.plan.econ.netAfterYield-a.plan.econ.netAfterYield).slice(0,3).map(r => `${esc(r.name)} ${signed(r.plan.econ.netAfterYield)}`).join(' · ')} · all ${farmRows.length} FARM = ${signed(portfolioNet)} for ${(portfolioMin/60).toFixed(0)}h · best ${esc(bestHour.name)} ${signed(bestHour.plan.econ.netPerHour)}/h`;
     const wf = validation.walk_forward;
     $('validation-intro').textContent = `${wf.train_n} oldest tracked peers price the ${wf.test_n} newest, unseen in training. Closer to 1× is better.`;
     $('validation').innerHTML = `<div><strong class="metric">${times(wf.model_miss)}</strong><span>Walk-forward model</span></div><div><strong class="metric">${times(wf.baseline_miss)}</strong><span>Flat baseline</span></div>`;
     const cohort = data.odds_cohort;
     const premiums = data.category_premiums.filter(c => c.n >= 2).sort((a, b) => b.n - a.n || a.category.localeCompare(b.category, 'en'));
-    $('methods').innerHTML = `<p><b>Formula.</b> implied value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × category premium × launch odds. The weekly term g = clamp(7-day TVL change, −30, +30) / 30, 0 when missing. Ridge penalties 2 and 12; slope bounded 0–1.5, growth ±0.25. The conditional value (before odds) is shown separately in every dossier.</p>
+    $('methods').innerHTML = `<p><b>Formula.</b> implied value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × category premium × launch odds. Relative momentum g = clamp(7-day TVL change − market median week (${data.market_median_change_7d.toFixed(1)}%), −30, +30) / 30; a missing week reads as the market itself. Ridge penalties 2 and 12; slope bounded 0–1.5, growth ±0.25. The conditional value (before odds) is shown separately in every dossier.</p>
       <p><b>Launch odds.</b> ${esc(cohort.disclosure)}</p>
       <table class="sensitivity"><caption>Cohort launch odds / sealed snapshot</caption><thead><tr><th>Tracking age</th><th>n</th><th>Launched</th><th>Raw rate</th><th>Applied odds</th></tr></thead><tbody>${cohort.buckets.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.launched}</td><td>${b.n ? oddsPct(b.raw_rate) : 'n/a'}</td><td>${oddsPct(b.rate)}</td></tr>`).join('')}<tr><th>No tracking date</th><td colspan="3">Disclosed conservative prior</td><td>${oddsPct(cohort.prior)}</td></tr></tbody></table>
       <p><b>Category premium.</b> Median gap between a category's traded tokens and the curve, shrunk toward 1× by n/(n+5) and clamped to 0.5–2×. Categories without traded peers stay at 1×.</p>
@@ -120,7 +125,7 @@
       ${shown.map(({ row, result }) => `<tr><td>#${row.rank}</td><td class="name"><button type="button" class="protocol" data-open="${esc(row.slug)}">${esc(row.name)}</button><small>${esc(row.category ?? 'Unclassified')} / ${esc(row.plan.chain)} / ${row.cohort}</small></td>
         <td class="tvl num"><span class="sr">TVL </span>${usd(row.tvl_usd)}<small class="${row.change_7d < 0 ? 'down' : 'up'}">${pct(row.change_7d)}</small></td>
         <td class="value num"><span class="sr">Implied value </span><strong>${usd(row.implied_value_usd)}</strong><small>${oddsPct(row.launch_odds)} odds / ${usd(row.conditional_value_usd)} if launched</small></td>
-        <td class="farm">${badge(row.verdict)}<small>${signed(row.plan.econ.net)} net / ${cash(row.plan.econ.totalCost)} fees${result ? ` · what-if ${signed(result.expectedNet)} expected net` : ''}</small></td><td class="select">${compareButton(row)}</td></tr>`).join('')}
+        <td class="farm">${badge(row.verdict)}<small>${signed(row.plan.econ.net)} net / ${row.plan.econ.netPerHour == null ? 'n/a' : signed(row.plan.econ.netPerHour) + '/h'} / ${cash(row.plan.econ.totalCost)} fees${result ? ` · what-if ${signed(result.expectedNet)}` : ''}</small></td><td class="select">${compareButton(row)}</td></tr>`).join('')}
       </tbody></table>` : '<p class="empty">No candidates match. Change a filter or <button type="button" data-clear>clear filters</button>.</p>';
     $('pager').hidden = !total;
     $('page-info').textContent = `${start + 1}–${Math.min(start + pageSize, total)} of ${total}`;
@@ -140,6 +145,9 @@
 
   function renderDetail() {
     const r = active, f = r.factors, m = r.plan.econ, e = economics(r, scenario);
+    const decision = m.verdict === 'SKIP'
+      ? `<p class="decision"><b>Skip this one:</b> ${esc(m.skipReason)}. ${cash(m.totalCost)} modeled fees against ${cash(m.expected)} expected at ${oddsPct(m.odds)} odds — the arithmetic does not pay at ${cash(m.deposit)}.</p>`
+      : `<p class="decision"><b>${m.verdict === 'FARM' ? 'Farm it' : 'Thin — farm only if terms verify'}:</b> ${signed(m.net)} net of fees, ${signed(m.netAfterYield)} after the ${oddsPct(m.altYield)} T-bill give-up, ${m.netPerHour == null ? 'n/a' : signed(m.netPerHour)}/hour over ${(m.minutes/60).toFixed(1)} h of work. Fees are covered from ${m.breakEvenOdds == null ? 'n/a' : oddsPct(m.breakEvenOdds)} launch odds up; the model says ${oddsPct(m.odds)}. A ${oddsPct(m.altYield)} T-bill would pay ${cash(m.incomeForgone)} on ${cash(m.deposit)} over ${m.days} days${m.verdict === 'FARM' ? ', and the expected drop beats that' : '; the drop clears fees but not that hurdle'}. Renew in 12-week blocks, up to ${m.holdBlocks}.</p>`;
     const modelLedger = ledger([
       ['Sized deposit (≤2% of TVL)', cash(m.deposit)], [`Gas / ${m.gasTxs} tx on ${esc(m.chain)}`, cash(m.fees.gas)],
       ['Slippage / bridge', `${cash(m.fees.slippage)} / ${cash(m.fees.bridge)}`], ['Yield give-up (disclosed)', cash(m.incomeForgone)],
@@ -160,7 +168,7 @@
       }).join('')}</tbody></table><p class="muted">Only the hypothetical reward pool changes: half/base/double. Deposits, costs, capital, hold and odds stay fixed. Valuation and snapshot TVL never enter this payout.</p>` : '';
     $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Protocol dossier / Rank ${r.rank} / ${r.cohort} / ${badge(r.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
       <div class="detail-kpis"><div><strong>${usd(r.implied_value_usd)}</strong><span>Implied value × ${oddsPct(r.launch_odds)} odds</span></div><div><strong>${usd(r.conditional_value_usd)}</strong><span>Value if it launches</span></div><div><strong>${signed(m.net)}</strong><span>Model net of fees</span></div><div><strong>${pct(r.change_7d)}</strong><span>7-day TVL change</span></div></div></header>
-      <div class="detail-columns"><article><h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
+      <div class="detail-columns"><article>${decision}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
         <ol class="timeline">${r.plan.steps.map(s => `<li><strong>${esc(s.title)}</strong><small>${esc(s.when)} / ${esc(s.time)} / ${esc(s.cost)}</small><p>${esc(s.action)}</p></li>`).join('')}</ol>
         <h3>Model economics / disclosed assumptions</h3>${modelLedger}${whatIf}
       </article><article><h3>Valuation ledger</h3>${ledger([

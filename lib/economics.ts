@@ -95,7 +95,7 @@ export const FALLBACK_ROUTE: Route = { entryTxs: 3, exitTxs: 3, weeklyTxs: 1, bp
 export const routeFor = (category: string | null): Route => ROUTES[category ?? ''] ?? FALLBACK_ROUTE;
 
 // Disclosed default scenario for the economic engine (assumptions, not advice).
-export const ECON_DEFAULTS = { capital: 1000, days: 42, airdropShare: 0.10, altYield: 0.04 };
+export const ECON_DEFAULTS = { capital: 1000, days: 84, airdropShare: 0.10, altYield: 0.04 };
 
 // Cheapest recorded chain by assumed gas; ties break lexically for determinism.
 export function cheapestChain(chains: string[]): { name: string; fee: number } {
@@ -242,6 +242,7 @@ export interface FarmEconomics {
   reviewDate: string;
   verdict: 'FARM' | 'THIN' | 'SKIP';
   skipReason: string | null;
+  holdBlocks: number;
 }
 
 export function farmEconomics(p: Protocol, ctx: EconContext): FarmEconomics {
@@ -291,17 +292,24 @@ export function farmEconomics(p: Protocol, ctx: EconContext): FarmEconomics {
   } else if (net <= 0) {
     verdict = 'SKIP';
     skipReason = 'fees eat the drop';
-  } else if (breakEvenOdds !== null && breakEvenOdds < odds * 0.8) {
+  } else if (netAfterYield > 0 && breakEvenOdds !== null && breakEvenOdds < odds * 0.8) {
+    // FARM clears both hurdles: out-of-pocket fees and the T-bill yield the
+    // capital gives up. THIN clears fees only.
     verdict = 'FARM';
   } else {
     verdict = 'THIN';
   }
+  // Block budgeting: one hold is a 12-week block. At the cohort's annual base
+  // rate, roughly 1/odds years of waiting is expected; budget that many blocks
+  // (capped at 6) and renew only while the arithmetic still pays. Disclosed
+  // planning assumption, not an observed launch schedule.
+  const holdBlocks = Math.min(6, Math.max(1, Math.round(1 / Math.max(odds, 0.05))));
 
   return {
     category: p.category, chain, chainFee, capital, days, weeks, airdropShare, altYield, odds,
     deposit, minTicket: route.minTicket, bps: route.bps, needsBridge: route.needsBridge,
     needsKYC: route.needsKYC, infraSkip, gasTxs,
     fees: { gas, bridge, slippage }, totalCost, incomeForgone, sliceIfLaunch, expected, net, netAfterYield,
-    breakEvenOdds, minutes, netPerHour, stopTvl, reviewDate, verdict, skipReason,
+    breakEvenOdds, minutes, netPerHour, stopTvl, reviewDate, verdict, skipReason, holdBlocks,
   };
 }
