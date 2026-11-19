@@ -16,6 +16,10 @@
       1440,
       900
     ],
+    "4-method.jpg": [
+      1440,
+      900
+    ],
     "1-board.jpg": [
       1440,
       900
@@ -28,8 +32,9 @@
   "javascript_errors": [],
   "external_requests": [],
   "screenshots": {
-    "3-filtered.jpg": 114032,
-    "1-board.jpg": 118964,
-    "2-detail.jpg": 138186
+    "3-filtered.jpg": 227419,
+    "4-method.jpg": 173891,
+    "1-board.jpg": 230284,
+    "2-detail.jpg": 276355
   }
 }
