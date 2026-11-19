@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { buildRadar, clamp, fitCurve, parseSnapshot, price, quantile, trackingDays, maturity } from '../lib/model.ts';
 import { farmPlan } from '../lib/farm.ts';
+import { farmEconomics, cohortOdds, CHAIN_FEES, ROUTES } from '../lib/economics.ts';
 import scenario from '../dashboard/scenario.js';
 const { defaults, economics } = scenario;
 
@@ -103,15 +104,20 @@ test('snapshot adapter rejects malformed or fabricated records', () => {
   assert.throws(() => parseSnapshot(JSON.stringify(badDate)), /Invalid or duplicate protocol/);
 });
 
-test('farm templates depend on protocol and sector; the snapshot does not assert campaigns', () => {
-  const a = farmPlan(bySlug.get('steakhouse-financial'), null);
-  const b = farmPlan(bySlug.get('lightning-network'), null);
-  assert.equal(a.research, true);
+test('farm templates depend on protocol and sector; verdicts come from the economics', () => {
+  const ctx = p => ({ asOf: snapshot.as_of, impliedValue: price(p, snapshot.as_of, radar.fit).value, odds: 0.64 });
+  const a = farmPlan(bySlug.get('steakhouse-financial'), null, farmEconomics(bySlug.get('steakhouse-financial'), ctx(bySlug.get('steakhouse-financial'))));
+  const b = farmPlan(bySlug.get('lightning-network'), null, farmEconomics(bySlug.get('lightning-network'), ctx(bySlug.get('lightning-network'))));
+  assert.equal(a.research, false);
   assert.equal(b.research, true);
+  assert.equal(b.verdict, 'SKIP');
+  assert.ok(['FARM', 'THIN'].includes(a.verdict));
   assert.notDeepEqual(a.steps, b.steps);
-  assert.equal(a.evidence.deployment, 'unknown');
-  assert.equal(a.evidence.exit, 'unknown');
+  assert.equal(b.evidence.deployment, 'unknown');
   assert.ok(a.steps.some(step => /eligibility/i.test(step.action)));
+  assert.ok(a.econ.net > 0);
+  // Without an explicit context the plan degrades to a disclosed skip, never a claim.
+  assert.equal(farmPlan(bySlug.get('steakhouse-financial'), null).research, true);
 });
 
 test('the pure farm scenario changes consistently with joint probability and fees', () => {
@@ -133,16 +139,16 @@ test('every source plan validates; review order starts top ten then deduplicated
   assert.equal(new Set(radar.plan_audit.review_order).size, radar.plan_audit.review_order.length);
   assert.ok(snapshot.watchlist.every(slug => radar.plan_audit.review_order.includes(slug)));
   const signatures = new Set();
+  const ctx = p => ({ asOf: snapshot.as_of, impliedValue: price(p, snapshot.as_of, radar.fit).value, odds: radar.odds_cohort.buckets[0].rate });
   for (const p of snapshot.protocols) {
-    const plan = farmPlan(p, trackingDays(p, snapshot.as_of));
-    assert.ok(plan.research, p.slug);
-    for (const key of ['deployment', 'asset', 'eligibility', 'exit']) assert.equal(plan.evidence[key], 'unknown');
+    const plan = farmPlan(p, trackingDays(p, snapshot.as_of), farmEconomics(p, ctx(p)));
+    assert.ok(['FARM', 'THIN', 'SKIP'].includes(plan.verdict), p.slug);
     assert.ok(plan.steps.length >= 3 && plan.steps.length <= 12);
     for (const s of plan.steps) {
       const text = `${s.title} (${s.when}; ${s.time}; ${s.cost}): ${s.action}`;
       assert.ok(text.trim().length >= 20 && text.trim().length <= 600, `${p.slug}: ${text.length}`);
     }
-    assert.ok(plan.steps.some(s => /skip/i.test(s.action)), p.slug);
+    assert.ok(plan.steps.some(s => /skip|withdraw|stop/i.test(s.action)), p.slug);
     assert.ok(plan.steps.some(s => s.action.includes(p.slug)), p.slug);
     signatures.add(JSON.stringify(plan.steps));
   }
@@ -150,7 +156,8 @@ test('every source plan validates; review order starts top ten then deduplicated
 });
 
 test('explicit hypothetical pool/deposits never depend on market cap or TVL, including sensitivity and zero cases', () => {
-  const row = radar.rows[0];
+  // A research (SKIP) row keeps the what-if gate semantics of this scenario test.
+  const row = radar.rows.find(r => r.plan.research);
   const s = { ...defaults, whatif: 1, pool: 1000000, deposits: 10000000 };
   const e = economics(row, s);
   assert.equal(e.share, 250 / 10000000);
@@ -194,4 +201,96 @@ test('small deterministic utilities respect bounds', () => {
   assert.equal(clamp(-1, 0, 100), 0);
   assert.equal(quantile([4, 1, 3, 2], 0.5), 2.5);
   assert.ok(fitCurve(radar.peers).slope >= 0);
+});
+
+test('cohort launch odds are empirical, monotone and bounded', () => {
+  const { buckets, prior } = radar.odds_cohort;
+  assert.equal(buckets.length, 5);
+  assert.equal(buckets.reduce((s, b) => s + b.n, 0), snapshot.protocols.filter(p => p.listed_at !== null).length);
+  let last = 0;
+  for (const b of buckets) {
+    assert.ok(b.rate >= 0.05 && b.rate <= 0.9, b.label);
+    assert.ok(b.rate >= last - 1e-9, `monotone at ${b.label}`);
+    last = b.rate;
+    if (b.n) assert.ok(Math.abs(b.raw_rate - b.launched / b.n) < 1e-6);
+  }
+  assert.equal(prior, 0.25);
+});
+
+test('every ranked row carries a finite economic verdict with consistent arithmetic', () => {
+  for (const row of radar.rows) {
+    const e = row.plan.econ;
+    assert.ok(['FARM', 'THIN', 'SKIP'].includes(row.verdict), row.slug);
+    assert.equal(row.verdict, e.verdict, row.slug);
+    assert.ok(Number.isFinite(e.net), row.slug);
+    assert.ok(e.deposit <= 0.02 * row.tvl_usd + 0.01, row.slug);
+    assert.ok(e.deposit <= e.capital, row.slug);
+    assert.ok(Math.abs(e.totalCost - (e.fees.gas + e.fees.bridge + e.fees.slippage)) < 0.02, row.slug);
+    assert.ok(Math.abs(e.net - (e.expected - e.totalCost)) < 0.02, row.slug);
+    assert.ok(Math.abs(e.netAfterYield - (e.net - e.incomeForgone)) < 0.02, row.slug);
+    if (e.breakEvenOdds !== null) assert.ok(Math.abs(e.breakEvenOdds * e.sliceIfLaunch - e.totalCost) < 0.02, row.slug);
+    assert.ok(row.launch_odds >= 0.05 && row.launch_odds <= 0.9, row.slug);
+    assert.match(e.reviewDate, /^\d{4}-\d{2}-\d{2}$/);
+  }
+  assert.ok(radar.counts.farm >= 5, `farm count ${radar.counts.farm}`);
+  assert.ok(radar.counts.skip >= 20, `skip count ${radar.counts.skip}`);
+  assert.equal(radar.counts.farm + radar.counts.thin + radar.counts.skip, radar.rows.length);
+});
+
+test('two radar builds are deeply equal (deterministic engine)', () => {
+  assert.deepEqual(buildRadar(parseSnapshot(source)), radar);
+});
+
+test('implied value is odds-weighted conditional value with a bounded category premium', () => {
+  for (const row of radar.rows) {
+    assert.equal(row.implied_value_usd, Math.max(1, Math.round(row.conditional_value_usd * row.launch_odds)), row.slug);
+    assert.ok(row.category_premium.factor >= 0.5 && row.category_premium.factor <= 2, row.slug);
+    assert.ok(row.valuation_sensitivity.no_odds === row.conditional_value_usd, row.slug);
+    // Farm slice prices the conditional value; odds enter once via expected.
+    const e = row.plan.econ;
+    const expectedSlice = Math.round(e.airdropShare * row.conditional_value_usd * e.deposit / row.tvl_usd * 100) / 100;
+    assert.ok(Math.abs(e.sliceIfLaunch - expectedSlice) < 0.02, row.slug);
+  }
+  assert.ok(radar.category_premiums.length >= 5);
+  for (const c of radar.category_premiums) {
+    assert.ok(c.n >= 1);
+    assert.ok(c.factor >= 0.5 && c.factor <= 2, c.category);
+  }
+});
+
+test('walk-forward time split holds out the newest traded peers and reports both misses', () => {
+  const wf = radar.validation.walk_forward;
+  assert.ok(wf, 'walk-forward must exist with 80+ dated peers');
+  assert.ok(wf.train_n >= 20 && wf.test_n >= 20);
+  assert.equal(wf.train_n + wf.test_n, radar.peers.filter(p => p.listed_at !== null).length);
+  assert.match(wf.cutoff_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(wf.model_miss > 1 && wf.baseline_miss > 1);
+  assert.ok(wf.model_beats_baseline >= 0 && wf.model_beats_baseline <= wf.test_n);
+  assert.ok(wf.band_coverage >= 0.7 && wf.band_coverage <= 0.9);
+  // The held-out half must be strictly newer than the training cutoff.
+  const dated = radar.peers.filter(p => p.listed_at !== null).sort((a, b) => a.listed_at < b.listed_at ? -1 : 1);
+  assert.ok(dated[wf.train_n].listed_at >= wf.cutoff_date);
+});
+
+test('oddsFor interpolates monotonically, uses the disclosed prior, and deposits never breach the 2% TVL cap', () => {
+  const odds = cohortOdds(snapshot.protocols, snapshot.as_of);
+  let last = 0;
+  for (const age of [0, 45, 90, 180, 272, 365, 547, 730, 1095, 1460, 2190, 5000]) {
+    const rate = odds.oddsFor(age);
+    assert.ok(rate >= 0.05 && rate <= 0.9, `age ${age}`);
+    assert.ok(rate >= last - 1e-9, `monotone at age ${age}`);
+    last = rate;
+  }
+  assert.equal(odds.oddsFor(null), 0.25);
+  assert.equal(odds.oddsFor(90), odds.buckets[0].rate);
+  assert.equal(odds.oddsFor(5000), odds.buckets[4].rate);
+  assert.equal(CHAIN_FEES.Solana, 0.01);
+  assert.equal(CHAIN_FEES.Ethereum, 4.0);
+  assert.ok(ROUTES.Chain.infraSkip);
+  for (const row of radar.rows) {
+    assert.ok(row.plan.econ.deposit <= row.tvl_usd * 0.02, row.slug);
+    assert.equal(row.plan.econ.reviewDate, '2026-12-26', row.slug);
+    assert.equal(row.plan.bps, row.plan.econ.bps, row.slug);
+    assert.ok(Number.isFinite(row.plan.fixed) && row.plan.fixed >= 0, row.slug);
+  }
 });

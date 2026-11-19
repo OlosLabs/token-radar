@@ -99,9 +99,19 @@ def main():
             page.locator('#assumptions summary').click()
             page.locator('#s-whatif').fill('0')
             page.locator('#assumptions summary').click()
+            page.locator('#verdict').select_option('FARM')
+            farm_rows = page.locator('.table tbody tr').count()
+            assert farm_rows > 0
+            assert 'FARM' in page.locator('.table tbody tr').first.inner_text()
+            page.locator('#verdict').select_option('')
+            page.locator('#sort').select_option('net')
+            assert page.locator('.table tbody tr').count() == 10
+            page.locator('#sort').select_option('rank')
+            assert 'board.json' in page.locator('#audit').inner_text()
+            assert '40/40' in page.locator('#audit').inner_text()
             page.evaluate('window.scrollTo(0,0)')
             page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=86)
-            checks.append('empty state, clear, sector filter and sort')
+            checks.append('empty state, clear, sector filter, verdict filter, net sort and self-audit strip')
             for width in [390, 320, 768]:
                 page.set_viewport_size({'width':width,'height':844})
                 page.locator('#category').select_option('')

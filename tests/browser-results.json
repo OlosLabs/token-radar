@@ -4,7 +4,7 @@
     "native dialog, Escape and focus return",
     "compare cap, removal and persistent selection",
     "shared scenario propagation and invalid-input retention",
-    "empty state, clear, sector filter and sort",
+    "empty state, clear, sector filter, verdict filter, net sort and self-audit strip",
     "mobile 320/390 and tablet 768 search, filters, sort, dossier and no overflow",
     "all 190 real protocol dossiers",
     "file:// rendering with network offline"
@@ -27,8 +27,8 @@
   "javascript_errors": [],
   "external_requests": [],
   "screenshots": {
-    "3-filtered.jpg": 171582,
-    "1-board.jpg": 176294,
-    "2-detail.jpg": 214470
+    "3-filtered.jpg": 185759,
+    "1-board.jpg": 188507,
+    "2-detail.jpg": 232246
   }
 }

@@ -38,11 +38,12 @@
         <label>Sector<select id="category"><option value="">All sectors</option></select></label>
         <label>Chain<select id="chain"><option value="">All chains</option></select></label>
         <label>Cohort<select id="cohort"><option value="">All candidates</option><option>Watchlist</option><option>Discovery</option><option value="below">Below watchlist floor</option></select></label>
-        <label>What-if result<select id="verdict"><option value="">Any result</option><option>Covers assumed costs</option><option>Below assumed cost</option><option>Research only</option></select></label>
-        <label>Sort by<select id="sort"><option value="rank">Implied value ↓</option><option value="tvl">TVL ↓</option><option value="growth">7-day growth ↓</option><option value="net">Expected net ↓</option><option value="name">Name A-Z</option></select></label>
+        <label>Verdict<select id="verdict"><option value="">Any verdict</option><option>FARM</option><option>THIN</option><option>SKIP</option></select></label>
+        <label>Sort by<select id="sort"><option value="rank">Implied value ↓</option><option value="net">Net of fees ↓</option><option value="odds">Launch odds ↓</option><option value="tvl">TVL ↓</option><option value="growth">7-day growth ↓</option><option value="name">Name A-Z</option></select></label>
       </div>
-      <details class="scenario-controls" id="assumptions"><summary>Shared farm assumptions <span id="scenario-summary"></span></summary><div id="inputs"></div>
-        <p class="muted">Calculator off by default. Enter 1 to enable an unverified what-if, then supply eligible deposits greater than zero. Pool and deposits are independent USD assumptions; neither is derived from market cap or snapshot TVL. Deposits include your capital. All rows remain research-only. Fixed fees and friction are assumptions, not quotes; include any bridging in fees. Net deducts fees and alternative yield, excluding capital loss, taxes and research time.</p><p id="invalid" role="status" hidden>Enter values within the displayed limits. Results retain your last valid assumptions.</p>
+      <p class="audit" id="audit" aria-label="Board self-audit"></p>
+      <details class="scenario-controls" id="assumptions"><summary>Unverified what-if calculator <span id="scenario-summary"></span></summary><div id="inputs"></div>
+        <p class="muted">The board's verdicts and net figures come from the model economics (disclosed assumptions, shown in every dossier). This separate calculator is off by default: enter 1 to enable an unverified what-if, then supply eligible deposits greater than zero. Pool and deposits are independent USD assumptions; neither is derived from market cap or snapshot TVL. Deposits include your capital. Fixed fees and friction are assumptions, not quotes. Net deducts fees and alternative yield, excluding capital loss, taxes and research time.</p><p id="invalid" role="status" hidden>Enter values within the displayed limits. Results retain your last valid assumptions.</p>
       </details>
       <div id="table"></div>
       <div class="pager" id="pager"><button id="prev" type="button">Previous</button><span id="page-info"></span><button id="next" type="button">Next</button></div>
