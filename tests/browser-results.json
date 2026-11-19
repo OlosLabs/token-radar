@@ -1,0 +1,34 @@
+{
+  "checks": [
+    "desktop board, watchlist coverage, keyboard skip and 5 complete rows at 1440x900",
+    "native dialog, Escape and focus return",
+    "compare cap, removal and persistent selection",
+    "shared scenario propagation and invalid-input retention",
+    "empty state, clear, sector filter and sort",
+    "mobile 320/390 and tablet 768 search, filters, sort, dossier and no overflow",
+    "all 190 real protocol dossiers",
+    "file:// rendering with network offline"
+  ],
+  "complete_desktop_rows": 5,
+  "screenshot_dimensions": {
+    "3-filtered.jpg": [
+      1440,
+      900
+    ],
+    "1-board.jpg": [
+      1440,
+      900
+    ],
+    "2-detail.jpg": [
+      1440,
+      900
+    ]
+  },
+  "javascript_errors": [],
+  "external_requests": [],
+  "screenshots": {
+    "3-filtered.jpg": 171582,
+    "1-board.jpg": 176294,
+    "2-detail.jpg": 214470
+  }
+}
