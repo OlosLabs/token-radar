@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="app.css">
 <script defer src="../data.js"></script>
 <script defer src="scenario.js"></script>
+<script defer src="recompute.js"></script>
 <script defer src="app.js"></script>
 </head>
 <body>
@@ -43,6 +44,17 @@
         <label>Sort by<select id="sort"><option value="rank">Implied value ↓</option><option value="net">Net of fees ↓</option><option value="odds">Launch odds ↓</option><option value="tvl">TVL ↓</option><option value="growth">7-day growth ↓</option><option value="name">Name A-Z</option></select></label>
       </div>
       <p class="audit" id="audit" aria-label="Board self-audit"></p>
+      <details class="scenario-controls" id="model-controls"><summary>Re-price the model <span id="model-summary"></span></summary>
+        <div id="model-inputs">
+          <label>Position / USD<input type="number" id="m-capital" min="100" max="1000000" step="100" value="1000"></label>
+          <label>Hold / days<input type="number" id="m-days" min="7" max="365" step="7" value="84"></label>
+          <label>Airdrop share / %<input type="number" id="m-share" min="1" max="30" step="0.5" value="10"></label>
+          <label>T-bill yield / %<input type="number" id="m-alt" min="0" max="15" step="0.5" value="4"></label>
+          <button type="button" id="m-reset">Reset to build defaults</button>
+          <button type="button" id="csv">Export CSV</button>
+        </div>
+        <p class="muted">These sliders re-run the same economics the build ran, in your browser, on every row: deposit sizing, per-chain gas, slippage, yield give-up, verdicts and the farm-now strip. The ranked implied values stay the build's; only the farm arithmetic moves. Assumptions, not quotes.</p>
+      </details>
       <details class="scenario-controls" id="assumptions"><summary>Unverified what-if calculator <span id="scenario-summary"></span></summary><div id="inputs"></div>
         <p class="muted">The board's verdicts and net figures come from the model economics (disclosed assumptions, shown in every dossier). This separate calculator is off by default: enter 1 to enable an unverified what-if, then supply eligible deposits greater than zero. Pool and deposits are independent USD assumptions; neither is derived from market cap or snapshot TVL. Deposits include your capital. Fixed fees and friction are assumptions, not quotes. Net deducts fees and alternative yield, excluding capital loss, taxes and research time.</p><p id="invalid" role="status" hidden>Enter values within the displayed limits. Results retain your last valid assumptions.</p>
       </details>

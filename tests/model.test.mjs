@@ -241,6 +241,16 @@ test('two radar builds are deeply equal (deterministic engine)', () => {
   assert.deepEqual(buildRadar(parseSnapshot(source)), radar);
 });
 
+test('every row carries a unique, data-derived insight', () => {
+  const insights = new Set();
+  for (const row of radar.rows) {
+    assert.ok(typeof row.insight === 'string' && row.insight.length > 80, row.slug);
+    assert.ok(row.insight.includes(row.slug) || row.insight.includes('market'), row.slug);
+    insights.add(row.insight);
+  }
+  assert.equal(insights.size, radar.rows.length);
+});
+
 test('implied value is odds-weighted conditional value with a bounded category premium', () => {
   for (const row of radar.rows) {
     assert.equal(row.implied_value_usd, Math.max(1, Math.round(row.conditional_value_usd * row.launch_odds)), row.slug);

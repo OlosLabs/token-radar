@@ -228,6 +228,9 @@ export interface FarmEconomics {
   needsKYC: boolean;
   infraSkip: boolean;
   gasTxs: number;
+  fixedTxs: number;
+  weeklyTxs: number;
+  weeklyMinutes: number;
   fees: { gas: number; bridge: number; slippage: number };
   totalCost: number;
   incomeForgone: number;
@@ -308,7 +311,7 @@ export function farmEconomics(p: Protocol, ctx: EconContext): FarmEconomics {
   return {
     category: p.category, chain, chainFee, capital, days, weeks, airdropShare, altYield, odds,
     deposit, minTicket: route.minTicket, bps: route.bps, needsBridge: route.needsBridge,
-    needsKYC: route.needsKYC, infraSkip, gasTxs,
+    needsKYC: route.needsKYC, infraSkip, gasTxs, fixedTxs: route.entryTxs + route.exitTxs, weeklyTxs: route.weeklyTxs, weeklyMinutes: route.weeklyMin,
     fees: { gas, bridge, slippage }, totalCost, incomeForgone, sliceIfLaunch, expected, net, netAfterYield,
     breakEvenOdds, minutes, netPerHour, stopTvl, reviewDate, verdict, skipReason, holdBlocks,
   };

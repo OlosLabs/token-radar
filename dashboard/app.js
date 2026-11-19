@@ -22,10 +22,20 @@
   const chosen = new Set();
   const pageSize = 10;
   let page = 0, active = rows[0], scenario = { ...defaults };
+  // Live model scenario: re-prices every plan in the browser via Recompute.
+  let model = { capital: data.econ_defaults.capital, days: data.econ_defaults.days, share: data.econ_defaults.airdropShare, alt: data.econ_defaults.altYield };
+  const liveEcon = r => (model.capital === r.plan.econ.capital && model.days === r.plan.econ.days && model.share === r.plan.econ.airdropShare && model.alt === r.plan.econ.altYield)
+    ? r.plan.econ : window.Recompute.farmRow(r, model);
   const farmRows = rows.filter(r => r.verdict === 'FARM');
-  const portfolioNet = farmRows.reduce((s, r) => s + r.plan.econ.netAfterYield, 0);
-  const portfolioMin = farmRows.reduce((s, r) => s + r.plan.econ.minutes, 0);
-  const bestHour = rows.reduce((b, r) => (r.plan.econ.netPerHour ?? -Infinity) > (b?.plan.econ.netPerHour ?? -Infinity) ? r : b, null);
+  let portfolioNet = 0, portfolioMin = 0, bestHour = null;
+  function refreshPortfolio() {
+    const live = rows.map(r => ({ r, e: liveEcon(r) }));
+    const farms = live.filter(({ e }) => e.verdict === 'FARM');
+    portfolioNet = farms.reduce((s, { e }) => s + e.netAfterYield, 0);
+    portfolioMin = farms.reduce((s, { r }) => s + r.plan.econ.minutes, 0);
+    bestHour = live.reduce((b, x) => ((x.e.netPerHour ?? x.r.plan.econ.netPerHour) ?? -Infinity) > ((b?.e.netPerHour ?? b?.r.plan.econ.netPerHour) ?? -Infinity) ? x : b, null);
+    $('farm-now').innerHTML = `<b>Farm now:</b> ${farms.slice().sort((a,b)=>b.e.netAfterYield-a.e.netAfterYield).slice(0,3).map(({r,e}) => `${esc(r.name)} ${signed(e.netAfterYield)}`).join(' · ')} · all ${farms.length} FARM = ${signed(portfolioNet)} for ${(portfolioMin/60).toFixed(0)}h${bestHour ? ` · best ${esc(bestHour.r.name)} ${signed(bestHour.e.netPerHour ?? bestHour.r.plan.econ.netPerHour)}/h` : ''}`;
+  }
   let previousFocus;
 
   function renderChart() {
@@ -64,9 +74,9 @@
     $('edition').textContent = `${data.as_of} UTC`;
     $('coverage').innerHTML = [[`${counts.covered}/${counts.watch}`, 'Watchlist covered'], [counts.farm, 'FARM verdicts'], [counts.total, 'Snapshot records']]
       .map(([value, label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join('');
-    $('farm-now').innerHTML = `<b>Farm now:</b> ${farmRows.slice().sort((a,b)=>b.plan.econ.netAfterYield-a.plan.econ.netAfterYield).slice(0,3).map(r => `${esc(r.name)} ${signed(r.plan.econ.netAfterYield)}`).join(' · ')} · all ${farmRows.length} FARM = ${signed(portfolioNet)} for ${(portfolioMin/60).toFixed(0)}h · best ${esc(bestHour.name)} ${signed(bestHour.plan.econ.netPerHour)}/h`;
+    $('farm-now').dataset.ready = '1';
     const wf = validation.walk_forward;
-    $('validation-intro').textContent = `${wf.train_n} oldest tracked peers price the ${wf.test_n} newest, unseen in training. Closer to 1× is better.`;
+    $('validation-intro').textContent = `${wf.train_n} oldest peers price the ${wf.test_n} newest. Closer to 1× is better.`;
     $('validation').innerHTML = `<div><strong class="metric">${times(wf.model_miss)}</strong><span>Walk-forward model</span></div><div><strong class="metric">${times(wf.baseline_miss)}</strong><span>Flat baseline</span></div>`;
     const cohort = data.odds_cohort;
     const premiums = data.category_premiums.filter(c => c.n >= 2).sort((a, b) => b.n - a.n || a.category.localeCompare(b.category, 'en'));
@@ -103,15 +113,15 @@
   function renderBoard() {
     const q = $('search').value.trim().toLowerCase();
     const category = $('category').value, chain = $('chain').value, cohort = $('cohort').value, verdict = $('verdict').value;
-    const selected = rows.map(row => ({ row, result: economics(row, scenario) })).filter(({ row }) =>
+    const selected = rows.map(row => ({ row, result: economics(row, scenario), live: liveEcon(row) })).filter(({ row, live }) =>
       (!q || [row.name, row.slug, row.category, ...row.chains].join(' ').toLowerCase().includes(q)) &&
       (!category || row.category === category) && (!chain || row.chains.includes(chain)) &&
-      (!cohort || (cohort === 'below' ? row.tvl_usd < data.floor_usd : row.cohort === cohort)) && (!verdict || row.verdict === verdict));
+      (!cohort || (cohort === 'below' ? row.tvl_usd < data.floor_usd : row.cohort === cohort)) && (!verdict || live.verdict === verdict));
     const sort = $('sort').value;
     selected.sort((a, b) => ({
       rank: () => 0, tvl: () => b.row.tvl_usd - a.row.tvl_usd,
       growth: () => (b.row.change_7d ?? -Infinity) - (a.row.change_7d ?? -Infinity),
-      net: () => (b.result?.expectedNet ?? b.row.plan.econ.net) - (a.result?.expectedNet ?? a.row.plan.econ.net),
+      net: () => (b.result?.expectedNet ?? b.live.net) - (a.result?.expectedNet ?? a.live.net),
       odds: () => b.row.launch_odds - a.row.launch_odds,
       name: () => a.row.name.localeCompare(b.row.name, 'en'),
     }[sort]() || a.row.rank - b.row.rank));
@@ -122,10 +132,10 @@
     $('matching').textContent = `${total} of ${rows.length} candidates`;
     $('scenario-summary').textContent = scenario.whatif ? `What-if on / ${usd(scenario.pool)} pool / ${usd(scenario.deposits)} deposits` : `Model economics on / ${usd(data.econ_defaults.capital)} position / ${data.econ_defaults.days} days`;
     $('table').innerHTML = total ? `<table class="table"><caption class="sr">Ranked launch candidates. Select a protocol to open its dossier.</caption><thead><tr><th scope="col">Rank</th><th scope="col">Protocol / sector</th><th scope="col">TVL / 7d change</th><th scope="col">Implied value / odds</th><th scope="col">Verdict / net of fees</th><th scope="col">Compare</th></tr></thead><tbody>
-      ${shown.map(({ row, result }) => `<tr><td>#${row.rank}</td><td class="name"><button type="button" class="protocol" data-open="${esc(row.slug)}">${esc(row.name)}</button><small>${esc(row.category ?? 'Unclassified')} / ${esc(row.plan.chain)} / ${row.cohort}</small></td>
+      ${shown.map(({ row, result, live }) => `<tr><td>#${row.rank}</td><td class="name"><button type="button" class="protocol" data-open="${esc(row.slug)}">${esc(row.name)}</button><small>${esc(row.category ?? 'Unclassified')} / ${esc(row.plan.chain)} / ${row.cohort}</small></td>
         <td class="tvl num"><span class="sr">TVL </span>${usd(row.tvl_usd)}<small class="${row.change_7d < 0 ? 'down' : 'up'}">${pct(row.change_7d)}</small></td>
         <td class="value num"><span class="sr">Implied value </span><strong>${usd(row.implied_value_usd)}</strong><small>${oddsPct(row.launch_odds)} odds / ${usd(row.conditional_value_usd)} if launched</small></td>
-        <td class="farm">${badge(row.verdict)}<small>${signed(row.plan.econ.net)} net / ${row.plan.econ.netPerHour == null ? 'n/a' : signed(row.plan.econ.netPerHour) + '/h'} / ${cash(row.plan.econ.totalCost)} fees${result ? ` · what-if ${signed(result.expectedNet)}` : ''}</small></td><td class="select">${compareButton(row)}</td></tr>`).join('')}
+        <td class="farm">${badge(live.verdict)}<small>${signed(live.net)} net / ${live.netPerHour == null ? 'n/a' : signed(live.netPerHour) + '/h'} / ${cash(live.totalCost)} fees${result ? ` · what-if ${signed(result.expectedNet)}` : ''}</small></td><td class="select">${compareButton(row)}</td></tr>`).join('')}
       </tbody></table>` : '<p class="empty">No candidates match. Change a filter or <button type="button" data-clear>clear filters</button>.</p>';
     $('pager').hidden = !total;
     $('page-info').textContent = `${start + 1}–${Math.min(start + pageSize, total)} of ${total}`;
@@ -144,18 +154,31 @@
   }
 
   function renderDetail() {
-    const r = active, f = r.factors, m = r.plan.econ, e = economics(r, scenario);
+    const r = active, f = r.factors, m = liveEcon(r), e = economics(r, scenario);
+    const v = window.Recompute.verify(r);
+    const wf = [
+      ['Peer curve at this TVL', usd(window.Recompute.priceRow(r).curve)],
+      [`× relative momentum (${pct(r.change_7d)} vs ${pct(data.market_median_change_7d)} market)`, `${window.Recompute.priceRow(r).growth.toFixed(4)}×`],
+      ['× seasoning', `${f.age.toFixed(4)}×`],
+      [`× category premium (n=${r.category_premium.n})`, `${f.premium.toFixed(4)}×`],
+      ['= value if launched', usd(r.conditional_value_usd)],
+      [`× cohort launch odds`, oddsPct(r.launch_odds)],
+      ['= implied value', usd(r.implied_value_usd)],
+    ];
+    const proof = `<h3>Recomputed here, live</h3>${ledger(wf)}<p class="muted">${v.impliedMatch && v.conditionalMatch ? `✓ This page just recomputed ${new Intl.NumberFormat('en-US').format(v.recomputed)} from the published coefficients — board.json has ${new Intl.NumberFormat('en-US').format(v.stored)} at rank ${r.rank}. Same arithmetic, your browser.` : `Recompute mismatch: page ${v.recomputed} vs board ${v.stored}.`}</p>`;
+    const insight = r.insight ? `<p class="insight">${esc(r.insight)}</p>` : '';
     const decision = m.verdict === 'SKIP'
-      ? `<p class="decision"><b>Skip this one:</b> ${esc(m.skipReason)}. ${cash(m.totalCost)} modeled fees against ${cash(m.expected)} expected at ${oddsPct(m.odds)} odds — the arithmetic does not pay at ${cash(m.deposit)}.</p>`
-      : `<p class="decision"><b>${m.verdict === 'FARM' ? 'Farm it' : 'Thin — farm only if terms verify'}:</b> ${signed(m.net)} net of fees, ${signed(m.netAfterYield)} after the ${oddsPct(m.altYield)} T-bill give-up, ${m.netPerHour == null ? 'n/a' : signed(m.netPerHour)}/hour over ${(m.minutes/60).toFixed(1)} h of work. Fees are covered from ${m.breakEvenOdds == null ? 'n/a' : oddsPct(m.breakEvenOdds)} launch odds up; the model says ${oddsPct(m.odds)}. A ${oddsPct(m.altYield)} T-bill would pay ${cash(m.incomeForgone)} on ${cash(m.deposit)} over ${m.days} days${m.verdict === 'FARM' ? ', and the expected drop beats that' : '; the drop clears fees but not that hurdle'}. Renew in 12-week blocks, up to ${m.holdBlocks}.</p>`;
+      ? `<p class="decision"><b>Skip this one:</b> ${esc(r.plan.econ.skipReason ?? 'the arithmetic does not pay at this size')}. ${cash(m.totalCost)} modeled fees against ${cash(m.expected)} expected at ${oddsPct(m.odds)} odds — the arithmetic does not pay at ${cash(m.deposit)}.</p>`
+      : `<p class="decision"><b>${m.verdict === 'FARM' ? 'Farm it' : 'Thin — farm only if terms verify'}:</b> ${signed(m.net)} net of fees, ${signed(m.netAfterYield)} after the ${oddsPct(model.alt)} T-bill give-up, ${r.plan.econ.netPerHour == null ? 'n/a' : signed(r.plan.econ.netPerHour)}/hour over ${(m.minutes/60).toFixed(1)} h of work. Fees are covered from ${m.breakEven == null ? 'n/a' : oddsPct(m.breakEven)} launch odds up; the model says ${oddsPct(m.odds)}. A ${oddsPct(model.alt)} T-bill would pay ${cash(m.incomeForgone)} on ${cash(m.deposit)} over ${m.days} days${m.verdict === 'FARM' ? ', and the expected drop beats that' : '; the drop clears fees but not that hurdle'}. Renew in 12-week blocks, up to ${r.plan.econ.holdBlocks}.</p>`;
+    const b = r.plan.econ; // build-time constants; m = live scenario economics
     const modelLedger = ledger([
-      ['Sized deposit (≤2% of TVL)', cash(m.deposit)], [`Gas / ${m.gasTxs} tx on ${esc(m.chain)}`, cash(m.fees.gas)],
-      ['Slippage / bridge', `${cash(m.fees.slippage)} / ${cash(m.fees.bridge)}`], ['Yield give-up (disclosed)', cash(m.incomeForgone)],
-      ['Total fees', cash(m.totalCost)], ['Slice if it launches', cash(m.sliceIfLaunch)],
+      ['Sized deposit (≤2% of TVL)', cash(m.deposit)], [`Gas / ${m.nTxs ?? b.gasTxs} tx on ${esc(b.chain)}`, cash(m.gas ?? b.fees.gas)],
+      ['Slippage / bridge', `${cash(m.slippage ?? b.fees.slippage)} / ${cash(b.fees.bridge)}`], ['Yield give-up (disclosed)', cash(m.incomeForgone)],
+      ['Total fees', cash(m.totalCost)], ['Slice if it launches', cash(m.slice ?? b.sliceIfLaunch)],
       ['Expected at cohort odds', `${cash(m.expected)} at ${oddsPct(m.odds)}`], ['Net of fees / after yield', `${signed(m.net)} / ${signed(m.netAfterYield)}`],
-      ['Break-even launch odds', m.breakEvenOdds == null ? 'No slice modeled' : `${oddsPct(m.breakEvenOdds)}${m.breakEvenOdds > 1 ? ' (unreachable)' : ''}`],
+      ['Break-even launch odds', (m.breakEven ?? b.breakEvenOdds) == null ? 'No slice modeled' : `${oddsPct(m.breakEven ?? b.breakEvenOdds)}${(m.breakEven ?? b.breakEvenOdds) > 1 ? ' (unreachable)' : ''}`],
       ['Net per hands-on hour', m.netPerHour == null ? 'n/a' : `${signed(m.netPerHour)} / ${m.minutes} min`],
-      ['Stop level / review date', `${usd(m.stopTvl)} TVL / ${m.reviewDate}`],
+      ['Stop level / review date', `${usd(b.stopTvl)} TVL / ${b.reviewDate}`],
     ]);
     const whatIf = e ? `<h3>Unverified what-if calculator</h3><p class="muted">${usd(scenario.pool)} hypothetical pool / ${usd(scenario.deposits)} assumed eligible deposits including your capital / ${scenario.prob}% assumed joint odds over ${scenario.days} days. Conditional payout = pool × min(1, capital / deposits). Independent of the model above; rewards exclude principal.</p>${ledger([
       ['One-time fees / friction', `${cash(e.fixed)} / ${cash(e.friction)}`], ['Recurring / opportunity', `${cash(e.recurring)} / ${cash(e.opportunity)}`],
@@ -168,7 +191,7 @@
       }).join('')}</tbody></table><p class="muted">Only the hypothetical reward pool changes: half/base/double. Deposits, costs, capital, hold and odds stay fixed. Valuation and snapshot TVL never enter this payout.</p>` : '';
     $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Protocol dossier / Rank ${r.rank} / ${r.cohort} / ${badge(r.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
       <div class="detail-kpis"><div><strong>${usd(r.implied_value_usd)}</strong><span>Implied value × ${oddsPct(r.launch_odds)} odds</span></div><div><strong>${usd(r.conditional_value_usd)}</strong><span>Value if it launches</span></div><div><strong>${signed(m.net)}</strong><span>Model net of fees</span></div><div><strong>${pct(r.change_7d)}</strong><span>7-day TVL change</span></div></div></header>
-      <div class="detail-columns"><article>${decision}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
+      <div class="detail-columns"><article>${decision}${insight}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
         <ol class="timeline">${r.plan.steps.map(s => `<li><strong>${esc(s.title)}</strong><small>${esc(s.when)} / ${esc(s.time)} / ${esc(s.cost)}</small><p>${esc(s.action)}</p></li>`).join('')}</ol>
         <h3>Model economics / disclosed assumptions</h3>${modelLedger}${whatIf}
       </article><article><h3>Valuation ledger</h3>${ledger([
@@ -177,7 +200,7 @@
         ['Value if launched (whole USD)', new Intl.NumberFormat('en-US').format(r.conditional_value_usd)],
         ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], ['Error-based range', range(r)],
         ['TVL-only refit sensitivity', usd(r.valuation_sensitivity.tvl_only)], ['Without age / without growth', `${usd(r.valuation_sensitivity.no_age)} / ${usd(r.valuation_sensitivity.no_growth)}`],
-      ])}<p class="muted">${r.extrapolated ? 'TVL is outside the traded fitting sample. ' : ''}The range applies traded-peer errors to a hypothetical circulating market cap. Implied value = value if launched × cohort odds; the odds are a historical base rate, not a promise.</p>
+      ])}<p class="muted">${r.extrapolated ? 'TVL is outside the traded fitting sample. ' : ''}The range applies traded-peer errors to a hypothetical circulating market cap. Implied value = value if launched × cohort odds; the odds are a historical base rate, not a promise.</p>${proof}
       <h3>Nearest traded references</h3><ul class="peers">${r.comparables.map(slug => {
         const p = peerBySlug.get(slug);
         return `<li><b>${esc(p.name)}</b><span>${esc(p.category ?? 'Unclassified')}<br>${usd(p.tvl_usd)} TVL / ${usd(p.mcap_usd)} cap</span></li>`;
@@ -258,6 +281,48 @@
   $('missing').hidden = true;
   $('fieldbook').hidden = false;
   $('provenance').hidden = false;
+  // Live model sliders: re-price every row in the browser.
+  const modelKeys = [['m-capital', 'capital', 1], ['m-days', 'days', 1], ['m-share', 'share', 100], ['m-alt', 'alt', 100]];
+  function readModel() {
+    const next = {};
+    for (const [id, key, div] of modelKeys) {
+      const el = $(id);
+      if (!el.validity.valid || !Number.isFinite(el.valueAsNumber)) return null;
+      next[key] = el.valueAsNumber / div;
+    }
+    return next;
+  }
+  function modelSummary() {
+    $('model-summary').textContent = `${usd(model.capital)} / ${model.days}d / ${Math.round(model.share * 100)}% share / ${(model.alt * 100).toFixed(1)}% T-bill`;
+  }
+  $('model-inputs').addEventListener('input', () => {
+    const next = readModel();
+    if (!next) return;
+    model = next;
+    modelSummary(); refreshPortfolio(); renderBoard(); renderCompare();
+    if ($('dossier').open) renderDetail();
+  });
+  $('m-reset').addEventListener('click', () => {
+    model = { capital: data.econ_defaults.capital, days: data.econ_defaults.days, share: data.econ_defaults.airdropShare, alt: data.econ_defaults.altYield };
+    $('m-capital').value = model.capital; $('m-days').value = model.days;
+    $('m-share').value = model.share * 100; $('m-alt').value = model.alt * 100;
+    modelSummary(); refreshPortfolio(); renderBoard(); renderCompare();
+    if ($('dossier').open) renderDetail();
+  });
+  $('csv').addEventListener('click', () => {
+    const head = 'rank,slug,name,category,chain,tvl_usd,change_7d,launch_odds,implied_value_usd,conditional_value_usd,verdict,deposit,fees,expected,net,net_after_yield,break_even_odds,stop_tvl,review_date';
+    const lines = rows.map(r => {
+      const m = liveEcon(r), b = r.plan.econ;
+      return [r.rank, r.slug, `"${r.name.replace(/"/g, '""')}"`, r.category ?? '', b.chain, r.tvl_usd, r.change_7d ?? '', r.launch_odds, r.implied_value_usd, r.conditional_value_usd, m.verdict, m.deposit, m.totalCost, m.expected, m.net, m.netAfterYield, (m.breakEven ?? b.breakEvenOdds) ?? '', b.stopTvl, b.reviewDate].join(',');
+    });
+    const blob = new Blob([head + '\n' + lines.join('\n') + '\n'], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `token-radar-${data.as_of}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  modelSummary(); refreshPortfolio();
   renderEvidence(); renderAudit(); renderChart(); renderBoard(); renderRecords();
   new ResizeObserver(renderChart).observe($('chart'));
 })();

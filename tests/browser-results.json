@@ -5,6 +5,7 @@
     "compare cap, removal and persistent selection",
     "shared scenario propagation and invalid-input retention",
     "empty state, clear, sector filter, verdict filter, net sort and self-audit strip",
+    "in-browser recompute exact on all rows; sliders re-price (48\u219278 FARM at $5K)",
     "mobile 320/390 and tablet 768 search, filters, sort, dossier and no overflow",
     "all 190 real protocol dossiers",
     "file:// rendering with network offline"
@@ -27,8 +28,8 @@
   "javascript_errors": [],
   "external_requests": [],
   "screenshots": {
-    "3-filtered.jpg": 140213,
-    "1-board.jpg": 144145,
-    "2-detail.jpg": 171838
+    "3-filtered.jpg": 114032,
+    "1-board.jpg": 118964,
+    "2-detail.jpg": 138186
   }
 }

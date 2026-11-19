@@ -1,5 +1,6 @@
 import { farmPlan } from './farm.ts';
 import { cohortOdds, farmEconomics, ECON_DEFAULTS } from './economics.ts';
+import { insightFor } from './insight.ts';
 
 export interface Protocol {
   slug: string;
@@ -250,6 +251,7 @@ export function buildRadar(snapshot: Snapshot) {
   const walk_forward = walkForward(peers, as_of, market_median_change_7d);
   const limits = [Math.min(...peers.map(p => p.tvl_usd)), Math.max(...peers.map(p => p.tvl_usd))];
   const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery');
+  const insightCtx = { median: market_median_change_7d, rankedTvls: candidates.map(({ p }) => p.tvl_usd).sort((a, b) => a - b), cohortRateFor: odds_cohort.oddsFor, asOf: as_of };
   const rows = candidates.map(({ p, status }) => {
     const factors = price(p, as_of, fit, premiums);
     const launch_odds = odds_cohort.oddsFor(factors.age_days);
@@ -269,6 +271,7 @@ export function buildRadar(snapshot: Snapshot) {
         no_growth: clamp(Math.round(factors.curve * factors.age * factors.premium), 1, MAX_VALUE),
         no_odds: factors.value },
       farm_steps: plan.steps.map(s => `${s.title} (${s.when}; ${s.time}; ${s.cost}): ${s.action}`),
+      insight: insightFor(p, factors.age_days, insightCtx),
     };
   }).sort((a, b) => b.implied_value_usd - a.implied_value_usd || lexical(a.slug, b.slug)).map((r, i) => ({ rank: i + 1, ...r }));
   if (rows.length < 100 || rows.length > 4000 || rows[0].implied_value_usd === rows.at(-1)?.implied_value_usd) {

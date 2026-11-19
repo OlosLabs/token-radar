@@ -49,12 +49,12 @@ def main():
             page.keyboard.press('Enter')
             assert page.locator('#board').evaluate('(e)=>e===document.activeElement')
             page.evaluate('window.scrollTo(0,0)')
-            page.screenshot(path=str(ROOT/'screenshots/1-board.jpg'), type='jpeg', quality=72)
+            page.screenshot(path=str(ROOT/'screenshots/1-board.jpg'), type='jpeg', quality=55)
             checks.append(f'desktop board, watchlist coverage, keyboard skip and {complete_rows} complete rows at 1440x900')
             page.locator('[data-open="steakhouse-financial"]').click()
             assert page.locator('#dossier').evaluate('(d)=>d.open')
             assert page.locator('#dossier-title').inner_text() == 'Steakhouse Financial'
-            page.screenshot(path=str(ROOT/'screenshots/2-detail.jpg'), type='jpeg', quality=72)
+            page.screenshot(path=str(ROOT/'screenshots/2-detail.jpg'), type='jpeg', quality=55)
             page.keyboard.press('Escape')
             assert not page.locator('#dossier').evaluate('(d)=>d.open')
             assert page.locator('[data-open="steakhouse-financial"]').evaluate('(e)=>e===document.activeElement')
@@ -110,8 +110,30 @@ def main():
             assert 'board.json' in page.locator('#audit').inner_text()
             assert '40/40' in page.locator('#audit').inner_text()
             page.evaluate('window.scrollTo(0,0)')
-            page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=72)
+            page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=55)
             checks.append('empty state, clear, sector filter, verdict filter, net sort and self-audit strip')
+            # Live recompute: every row's valuation and default farm economics
+            # must reproduce exactly in the browser; sliders must move verdicts.
+            recompute = page.evaluate('''() => {
+              let bad = 0;
+              for (const r of FIELD.rows) {
+                const v = Recompute.verify(r);
+                if (!v.impliedMatch || !v.conditionalMatch) bad++;
+                const f = Recompute.farmRow(r, {});
+                if (Math.abs(f.net - r.plan.econ.net) > 0.02 || f.verdict !== r.plan.econ.verdict) bad++;
+              }
+              const f5k = FIELD.rows.filter(r => Recompute.farmRow(r, {capital: 5000}).verdict === 'FARM').length;
+              return {bad, f5k, fDefault: FIELD.rows.filter(r => r.verdict === 'FARM').length};
+            }''')
+            assert recompute['bad'] == 0, recompute
+            assert recompute['f5k'] != recompute['fDefault'], recompute
+            page.locator('#model-controls summary').click()
+            page.locator('#m-capital').fill('5000')
+            assert '$5K' in page.locator('#model-summary').inner_text()
+            page.locator('#m-reset').click()
+            assert '$1K' in page.locator('#model-summary').inner_text()
+            page.locator('#model-controls summary').click()
+            checks.append(f"in-browser recompute exact on all rows; sliders re-price ({recompute['fDefault']}→{recompute['f5k']} FARM at $5K)")
             for width in [390, 320, 768]:
                 page.set_viewport_size({'width':width,'height':844})
                 page.locator('#category').select_option('')
