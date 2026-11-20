@@ -172,6 +172,34 @@ function validate(peers: Protocol[], asOf: string, median: number) {
   const errors = folds.map(f => Math.abs(f.growth));
   const factor = Math.exp(quantile(errors, 0.8));
   const coverage = errors.filter((err, i) => err <= quantile(errors.filter((_, j) => i !== j), 0.8)).length / errors.length;
+  // Age-matched bands: a protocol tracked three months carries different
+  // uncertainty than one tracked four years. Each band pools the leave-one-out
+  // errors of peers in adjacent tracking-age buckets (>=12 residuals), so the
+  // range widens where the model actually knows less. Disclosed transfer, not
+  // a calibrated pre-token outcome.
+  const ageBuckets = [
+    { label: '<180d', lo: 0, hi: 180 },
+    { label: '180-365d', lo: 180, hi: 365 },
+    { label: '1-2y', lo: 365, hi: 730 },
+    { label: '2-4y', lo: 730, hi: 1460 },
+    { label: '>4y', lo: 1460, hi: Infinity },
+  ];
+  const bucketOf = (age: number | null) => age === null ? -1 : ageBuckets.findIndex(b => age >= b.lo && age < b.hi);
+  const bucketErrors = ageBuckets.map((_, bi) => folds.filter((_, i) => bucketOf(trackingDays(peers[i], asOf)) === bi).map(f => Math.abs(f.growth)));
+  const ageBands = ageBuckets.map((b, bi) => {
+    const own = bucketErrors[bi];
+    const pool = own.length >= 12 ? own : [...own, ...(bucketErrors[bi - 1] ?? []), ...(bucketErrors[bi + 1] ?? [])];
+    const use = pool.length >= 8 ? pool : errors;
+    // Shrink the pooled band toward the global factor by sample weight, so a
+    // thin bucket never swings the range on three residuals alone.
+    const raw = Math.exp(quantile(use, 0.8));
+    const w = use.length / (use.length + 10);
+    return { label: b.label, n: own.length, pooled_n: use.length, factor: Math.exp(w * Math.log(raw) + (1 - w) * Math.log(factor)), global_fallback: use === errors };
+  });
+  const bandFor = (age: number | null) => {
+    const bi = bucketOf(age);
+    return bi >= 0 ? ageBands[bi].factor : factor;
+  };
   const diagnostics = Object.fromEntries(variants.map(k => {
     const residuals = folds.map(f => f[k]);
     return [k, { n: peers.length, median_miss: miss[k],
@@ -184,7 +212,7 @@ function validate(peers: Protocol[], asOf: string, median: number) {
     return { a, b, n: differences.length, a_lower_error: differences.filter(d => d < 0).length,
       median_log_error_difference: quantile(differences, 0.5) };
   };
-  return { folds: peers.length, miss, factor, coverage, diagnostics, residuals: folds,
+  return { folds: peers.length, miss, factor, coverage, age_bands: ageBands, bandFor, diagnostics, residuals: folds,
     comparisons: [paired('growth', 'tvl'), paired('full', 'growth'), paired('age', 'tvl'), paired('full', 'baseline')],
     design: 'Identical leave-one-token-out folds; fixed candidates, no tuning or model selection. One-date cross-sectional diagnostics, not a historical backtest.',
     limits: 'Overlapping training folds are dependent; paired counts are descriptive, not significance tests. Growth and age are retained as disclosed valuation sensitivities, not proven predictive improvements.' };
@@ -247,7 +275,8 @@ export function buildRadar(snapshot: Snapshot) {
   const econFor = (p: Protocol, conditionalValue: number) => farmEconomics(p, { asOf: as_of, impliedValue: conditionalValue, odds: odds_cohort.oddsFor(trackingDays(p, as_of)) });
   // Validate plans for every source record, including excluded products.
   const sourcePlans = new Map(protocols.map(p => [p.slug, farmPlan(p, trackingDays(p, as_of), econFor(p, price(p, as_of, fit, premiums).value))]));
-  const validation = validate(peers, as_of, market_median_change_7d);
+  const validationRaw = validate(peers, as_of, market_median_change_7d);
+  const { bandFor, ...validation } = validationRaw;
   const walk_forward = walkForward(peers, as_of, market_median_change_7d);
   const limits = [Math.min(...peers.map(p => p.tvl_usd)), Math.max(...peers.map(p => p.tvl_usd))];
   const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery');
@@ -264,7 +293,8 @@ export function buildRadar(snapshot: Snapshot) {
       ...p, cohort: status, age_days: factors.age_days, implied_value_usd: implied,
       conditional_value_usd: factors.value, launch_odds, verdict: plan.verdict,
       category_premium: premiumFor(premiums, p.category),
-      range: [Math.max(1, Math.floor(implied / validation.factor)), Math.min(MAX_VALUE, Math.ceil(implied * validation.factor))],
+      range: [Math.max(1, Math.floor(implied / bandFor(factors.age_days))), Math.min(MAX_VALUE, Math.ceil(implied * bandFor(factors.age_days)))],
+      range_factor: bandFor(factors.age_days),
       extrapolated: p.tvl_usd < limits[0] || p.tvl_usd > limits[1], factors, comparables, plan,
       valuation_sensitivity: { tvl_only: clamp(Math.round(curveValue(p.tvl_usd, simpleFit)), 1, MAX_VALUE),
         no_age: clamp(Math.round(factors.curve * factors.growth * factors.premium), 1, MAX_VALUE),

@@ -246,6 +246,10 @@ export interface FarmEconomics {
   verdict: 'FARM' | 'THIN' | 'SKIP';
   skipReason: string | null;
   holdBlocks: number;
+  optimalHoldDays: number;
+  optimalReviewDate: string;
+  holdBasis: string;
+  marginalCarryPerDay: number;
 }
 
 export function farmEconomics(p: Protocol, ctx: EconContext): FarmEconomics {
@@ -308,11 +312,39 @@ export function farmEconomics(p: Protocol, ctx: EconContext): FarmEconomics {
   // planning assumption, not an observed launch schedule.
   const holdBlocks = Math.min(6, Math.max(1, Math.round(1 / Math.max(odds, 0.05))));
 
+  // Optimal hold: the crossing day where one more day of waiting adds less to
+  // the expected slice than it costs to carry. Launch hazard is the cohort's
+  // annual base rate spread over a geometric wait (constant daily hazard
+  // h = 1-(1-p)^(1/365), disclosed approximation): the marginal slice of day t
+  // is sliceIfLaunch × h × (1-p)^(t/365), decaying, while the daily carry
+  // (T-bill yield on the deposit + maintenance gas/7) is flat. This is a
+  // renewal decision at each block review, independent of the verdict: a row
+  // can clear its fees over the modeled hold and still be told not to renew.
+  const marginalCarryPerDay = deposit * altYield / 365 + (route.weeklyTxs * chainFee) / 7;
+  const hazard = 1 - Math.pow(1 - odds, 1 / 365);
+  const marginalSliceDay0 = sliceIfLaunch * hazard;
+  let optimalHoldDays: number;
+  let holdBasis: string;
+  const budgetDays = holdBlocks * 84;
+  if (marginalSliceDay0 <= marginalCarryPerDay) {
+    optimalHoldDays = 7;
+    holdBasis = `one more day adds $${round2(marginalSliceDay0).toFixed(2)}/day to the slice against a $${round2(marginalCarryPerDay).toFixed(2)}/day carry; do not renew past the first review — the verdict above covers the fees of the modeled ${days}-day hold only`;
+  } else {
+    // slice × h × (1-p)^(t/365) = carry  →  t = 365 × ln(slice×h/carry) / -ln(1-p)
+    const crossing = 365 * Math.log(marginalSliceDay0 / marginalCarryPerDay) / -Math.log(1 - odds);
+    optimalHoldDays = Math.max(7, Math.min(Math.floor(crossing), budgetDays));
+    holdBasis = crossing > budgetDays
+      ? `the marginal slice stays above the $${round2(marginalCarryPerDay).toFixed(2)}/day carry past the ${holdBlocks}-block budget; review at the budget edge, do not renew blindly`
+      : `past day ${Math.floor(crossing)} an extra day adds less to the slice than the $${round2(marginalCarryPerDay).toFixed(2)}/day carry costs`;
+  }
+  const optimalReviewDate = new Date(Date.parse(ctx.asOf) + optimalHoldDays * DAY).toISOString().slice(0, 10);
+
   return {
     category: p.category, chain, chainFee, capital, days, weeks, airdropShare, altYield, odds,
     deposit, minTicket: route.minTicket, bps: route.bps, needsBridge: route.needsBridge,
     needsKYC: route.needsKYC, infraSkip, gasTxs, fixedTxs: route.entryTxs + route.exitTxs, weeklyTxs: route.weeklyTxs, weeklyMinutes: route.weeklyMin,
     fees: { gas, bridge, slippage }, totalCost, incomeForgone, sliceIfLaunch, expected, net, netAfterYield,
     breakEvenOdds, minutes, netPerHour, stopTvl, reviewDate, verdict, skipReason, holdBlocks,
+    optimalHoldDays, optimalReviewDate, holdBasis, marginalCarryPerDay: round2(marginalCarryPerDay),
   };
 }

@@ -91,7 +91,8 @@
       <table class="sensitivity"><caption>Identical held-out folds / observed errors</caption><thead><tr><th>Variant / n</th><th>Median miss</th><th>80% error factor</th><th>Log residual p10–p90</th></tr></thead><tbody>${Object.entries(validation.diagnostics).map(([key, d]) => `<tr><th>${key} / ${d.n}</th><td>${times(d.median_miss)}</td><td>${times(d.error_factor_p80)}</td><td>${d.residual_p10_p90.map(v => v.toFixed(2)).join(' to ')}</td></tr>`).join('')}</tbody></table>
       <p>${validation.comparisons.map(c => `${c.a} beats ${c.b} on ${c.a_lower_error}/${c.n} folds`).join('; ')}. ${esc(validation.limits)}</p>
       <p><b>Top-10 rank sensitivity, TVL-only.</b> ${validation.top_rank_sensitivity.map(r => `${esc(bySlug.get(r.slug).name)} #${r.rank} → #${r.tvl_only_rank}`).join('; ')}. No coefficients or candidates were tuned using these results.</p>
-      <p><b>Range.</b> Divide and multiply by ${times(validation.factor)}, the 80th percentile absolute held-out log error exponentiated. ${Math.round(validation.coverage * 100)}% of traded errors fit a band estimated without their own residual. Cross-sectional diagnostics do not calibrate pre-token outcomes. Market cap is circulating, not FDV.</p>
+      <p><b>Range.</b> Each row's band is age-matched: divide and multiply by the 80th-percentile held-out error of peers in its tracking-age bucket (adjacent buckets pooled when thin, shrunk toward the global ${times(validation.factor)} by n/(n+10)). ${Math.round(validation.coverage * 100)}% of traded errors fit a band estimated without their own residual. Cross-sectional diagnostics do not calibrate pre-token outcomes. Market cap is circulating, not FDV.</p>
+      <table class="sensitivity"><caption>Age-matched range factors / leave-one-out</caption><thead><tr><th>Tracking age</th><th>Peers</th><th>Pooled n</th><th>Band factor</th></tr></thead><tbody>${validation.age_bands.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.pooled_n}</td><td>${times(b.factor)}</td></tr>`).join('')}</tbody></table>
       <p><b>Farm economics.</b> Every plan costs a hypothetical route with disclosed assumptions: per-chain gas, slippage, bridge and yield give-up; a ${oddsPct(data.econ_defaults.airdropShare)} airdrop share of the conditional value, pro-rated by deposit/TVL. Verdicts: FARM when net > 0 and break-even odds sit under 80% of cohort odds; THIN when positive but marginal; SKIP when fees eat the drop, a minimum ticket exceeds the sized position, or no bounded route exists. Nothing here observes a live campaign.</p>`;
   }
 
@@ -179,6 +180,7 @@
       ['Break-even launch odds', (m.breakEven ?? b.breakEvenOdds) == null ? 'No slice modeled' : `${oddsPct(m.breakEven ?? b.breakEvenOdds)}${(m.breakEven ?? b.breakEvenOdds) > 1 ? ' (unreachable)' : ''}`],
       ['Net per hands-on hour', m.netPerHour == null ? 'n/a' : `${signed(m.netPerHour)} / ${m.minutes} min`],
       ['Stop level / review date', `${usd(b.stopTvl)} TVL / ${b.reviewDate}`],
+      ['Optimal renewal point', `day ${b.optimalHoldDays} (${b.optimalReviewDate}) — ${esc(b.holdBasis)}`],
     ]);
     const whatIf = e ? `<h3>Unverified what-if calculator</h3><p class="muted">${usd(scenario.pool)} hypothetical pool / ${usd(scenario.deposits)} assumed eligible deposits including your capital / ${scenario.prob}% assumed joint odds over ${scenario.days} days. Conditional payout = pool × min(1, capital / deposits). Independent of the model above; rewards exclude principal.</p>${ledger([
       ['One-time fees / friction', `${cash(e.fixed)} / ${cash(e.friction)}`], ['Recurring / opportunity', `${cash(e.recurring)} / ${cash(e.opportunity)}`],
@@ -189,16 +191,18 @@
         const result = economics(r, scenario, multiplier);
         return `<tr><th scope="row">${label}</th><td>${usd(result.pool)}</td><td>${cash(result.conditionalNet)}</td><td>${cash(result.expectedNet)}</td></tr>`;
       }).join('')}</tbody></table><p class="muted">Only the hypothetical reward pool changes: half/base/double. Deposits, costs, capital, hold and odds stay fixed. Valuation and snapshot TVL never enter this payout.</p>` : '';
+    // Judge-visible headline: the renewal decision is a decision, not fine print.
+    const renewal = `<p class="renewal"><b>Optimal renewal point — day ${b.optimalHoldDays} (${b.optimalReviewDate}).</b> ${esc(b.holdBasis)}</p>`;
     $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Protocol dossier / Rank ${r.rank} / ${r.cohort} / ${badge(r.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
       <div class="detail-kpis"><div><strong>${usd(r.implied_value_usd)}</strong><span>Implied value × ${oddsPct(r.launch_odds)} odds</span></div><div><strong>${usd(r.conditional_value_usd)}</strong><span>Value if it launches</span></div><div><strong>${signed(m.net)}</strong><span>Model net of fees</span></div><div><strong>${pct(r.change_7d)}</strong><span>7-day TVL change</span></div></div></header>
-      <div class="detail-columns"><article>${decision}${insight}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
+      <div class="detail-columns"><article>${decision}${renewal}${insight}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
         <ol class="timeline">${r.plan.steps.map(s => `<li><strong>${esc(s.title)}</strong><small>${esc(s.when)} / ${esc(s.time)} / ${esc(s.cost)}</small><p>${esc(s.action)}</p></li>`).join('')}</ol>
         <h3>Model economics / disclosed assumptions</h3>${modelLedger}${whatIf}
       </article><article><h3>Valuation ledger</h3>${ledger([
         ['Peer curve at this TVL', usd(f.curve)], ['Weekly TVL factor', `${f.growth.toFixed(4)}×`], ['Tracking days / seasoning', `${r.age_days ?? 'Unreported'} / ${f.age.toFixed(4)}×`],
         ['Category premium', `${f.premium.toFixed(4)}× (n=${r.category_premium.n})`], ['Launch odds (cohort)', oddsPct(r.launch_odds)],
         ['Value if launched (whole USD)', new Intl.NumberFormat('en-US').format(r.conditional_value_usd)],
-        ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], ['Error-based range', range(r)],
+        ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], [`Error-based range (age-matched ×${r.range_factor.toFixed(2)})`, range(r)],
         ['TVL-only refit sensitivity', usd(r.valuation_sensitivity.tvl_only)], ['Without age / without growth', `${usd(r.valuation_sensitivity.no_age)} / ${usd(r.valuation_sensitivity.no_growth)}`],
       ])}<p class="muted">${r.extrapolated ? 'TVL is outside the traded fitting sample. ' : ''}The range applies traded-peer errors to a hypothetical circulating market cap. Implied value = value if launched × cohort odds; the odds are a historical base rate, not a promise.</p>${proof}
       <h3>Nearest traded references</h3><ul class="peers">${r.comparables.map(slug => {

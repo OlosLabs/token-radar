@@ -120,6 +120,8 @@ body:has(dialog[open]) {overflow:hidden}
 #model-inputs input {font:13px var(--mono);padding:5px 7px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink)}
 .insight {font-size:12.5px;line-height:1.55;color:var(--muted);border-left:2px solid var(--rule);padding-left:9px;margin-bottom:10px}
 .decision {padding:8px 10px;border:1px solid var(--rule);border-left:3px solid var(--blue);background:var(--wash);font-size:13px;line-height:1.55;margin-bottom:10px}
+.renewal {padding:7px 10px;border:1px solid var(--rule);border-left:3px solid var(--green);background:var(--sheet);font-size:13px;line-height:1.5;margin-bottom:10px}
+.renewal b {color:var(--ink)}
 .farm-now {margin:0 0 6px;padding:4px 9px;border:1px solid var(--rule);border-left:3px solid var(--green);background:var(--sheet);font:11.5px/1.4 var(--mono)}
 .badge {display:inline-block;padding:1px 7px;border:1px solid currentColor;border-radius:3px;font:600 11px var(--mono);letter-spacing:.06em}
 .b-FARM {color:#1c6b3c}

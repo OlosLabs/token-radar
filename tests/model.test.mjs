@@ -251,6 +251,23 @@ test('every row carries a unique, data-derived insight', () => {
   assert.equal(insights.size, radar.rows.length);
 });
 
+test('optimal hold and age-matched ranges are computed per row', () => {
+  const bands = radar.validation.age_bands;
+  assert.equal(bands.length, 5);
+  for (const b of bands) assert.ok(b.factor > 1 && Number.isFinite(b.factor), b.label);
+  const holds = new Set();
+  for (const row of radar.rows) {
+    const e = row.plan.econ;
+    assert.ok(e.optimalHoldDays >= 7 && e.optimalHoldDays <= e.holdBlocks * 84, row.slug);
+    assert.ok(typeof e.holdBasis === 'string' && e.holdBasis.length > 30, row.slug);
+    assert.match(e.optimalReviewDate, /^\d{4}-\d{2}-\d{2}$/, row.slug);
+    assert.ok(row.range_factor > 1, row.slug);
+    assert.equal(row.range[0], Math.max(1, Math.floor(row.implied_value_usd / row.range_factor)), row.slug);
+    holds.add(e.optimalHoldDays);
+  }
+  assert.ok(holds.size >= 3, 'holds must vary across rows');
+});
+
 test('implied value is odds-weighted conditional value with a bounded category premium', () => {
   for (const row of radar.rows) {
     assert.equal(row.implied_value_usd, Math.max(1, Math.round(row.conditional_value_usd * row.launch_odds)), row.slug);
