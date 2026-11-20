@@ -1,7 +1,7 @@
 {
   "checks": [
     "desktop board, watchlist coverage, keyboard skip and 5 complete rows at 1440x900",
-    "native dialog, Escape and focus return",
+    "native dialog, Escape and focus return; renewal contrast FARM day 73 vs THIN day 7 both rendered",
     "compare cap, removal and persistent selection",
     "shared scenario propagation and invalid-input retention",
     "empty state, clear, sector filter, verdict filter, net sort and self-audit strip",
@@ -35,6 +35,6 @@
     "3-filtered.jpg": 227419,
     "4-method.jpg": 173891,
     "1-board.jpg": 230284,
-    "2-detail.jpg": 274314
+    "2-detail.jpg": 279537
   }
 }
