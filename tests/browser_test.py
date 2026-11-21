@@ -230,7 +230,7 @@ def main():
                 page.locator('#search').fill(row['slug'])
                 page.locator(f'[data-open="{row["slug"]}"]').click()
                 assert page.locator('#dossier-title').inner_text() == row['name']
-                assert page.locator('.timeline li').count() == len(row['farm_steps'])
+                assert page.locator('.farmplan tbody tr').count() == len(row['farm_steps']) + 1
                 page.keyboard.press('Escape')
             checks.append(f'all {len(data["rows"])} dossiers reachable with complete timelines')
             context.unroute('**/*')

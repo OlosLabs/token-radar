@@ -1,25 +1,24 @@
-// What-if calculator: pool/deposits are independent USD assumptions.
+// What-if calculator: independent USD assumptions, off by default.
 const fields = [
-  ['whatif', 'Enable unverified what-if / 0=no, 1=yes', 0, 0, 1, 1],
-  ['capital', 'Capital / USD', 250, 0, 1000000, 1],
+  ['whatif', 'Enable what-if / 0=no, 1=yes', 0, 0, 1, 1],
+  ['capital', 'Capital / USD', 250, 0, 1e6, 1],
   ['days', 'Hold / days', 30, 1, 365, 1],
-  ['pool', 'Hypothetical eligible reward pool / USD', 0, 0, 1000000000000, 1],
-  ['deposits', 'Hypothetical eligible deposits / USD', 0, 0, 1000000000000, 1],
-  ['prob', 'Joint launch + eligibility odds / %', 10, 0, 100, 0.1],
-  ['annual', 'Alternative yield / % annual', 4, 0, 100, 0.1],
-  ['fixed', 'Assumed round-trip fixed fees / USD', 2, 0, 10000, 0.01],
-  ['bps', 'Assumed round-trip friction / bps', 35, 0, 10000, 1],
-  ['weekly', 'Extra weekly fees / USD', 0, 0, 10000, 0.01],
+  ['pool', 'Reward pool / USD', 0, 0, 1e12, 1],
+  ['deposits', 'Eligible deposits / USD', 0, 0, 1e12, 1],
+  ['prob', 'Joint odds / %', 10, 0, 100, .1],
+  ['annual', 'Alt yield / %', 4, 0, 100, .1],
+  ['fixed', 'Fixed fees / USD', 2, 0, 1e4, .01],
+  ['bps', 'Friction / bps', 35, 0, 1e4, 1],
+  ['weekly', 'Weekly fees / USD', 0, 0, 1e4, .01],
 ];
 const defaults = Object.fromEntries(fields.map(([k, , v]) => [k, v]));
-function economics(row, s, poolMultiplier = 1) {
+function economics(row, s, mult = 1) {
   if (s.whatif !== 1 || s.capital <= 0 || s.deposits <= 0) return null;
-  if (fields.some(([k, , , min, max]) => !Number.isFinite(s[k]) || s[k] < min || s[k] > max) || !Number.isFinite(poolMultiplier) || poolMultiplier < 0) return null;
-  const friction = s.capital * s.bps / 10000, recurring = s.weekly * Math.ceil(s.days / 7);
+  if (fields.some(([k, , , min, max]) => !Number.isFinite(s[k]) || s[k] < min || s[k] > max) || !Number.isFinite(mult) || mult < 0) return null;
+  const friction = s.capital * s.bps / 1e4, recurring = s.weekly * Math.ceil(s.days / 7);
   const opportunity = s.capital * s.annual / 100 * s.days / 365;
   const cost = s.fixed + friction + recurring + opportunity;
-  // Deposits include capital. No TVL/value in payout.
-  const share = Math.min(1, s.capital / s.deposits), pool = s.pool * poolMultiplier;
+  const share = Math.min(1, s.capital / s.deposits), pool = s.pool * mult;
   const conditional = pool * share, expected = conditional * s.prob / 100;
   return { fixed: s.fixed, friction, recurring, opportunity, cost, share, pool, conditional, expected,
     hypothetical: row.plan.research, expectedNet: expected - cost, conditionalNet: conditional - cost,

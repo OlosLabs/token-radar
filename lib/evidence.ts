@@ -173,7 +173,7 @@ export function nestedCoverage(protocols: Protocol[], peers: Protocol[], asOf: s
     conditional: { loo: count(loo, 'conditionalHit'), split: count(split, 'conditionalHit') },
     buckets: buckets.map(bucket => ({ bucket, loo: count(loo.filter(x => x.bucket === bucket)), split: count(split.filter(x => x.bucket === bucket)),
       conditional_loo: count(loo.filter(x => x.bucket === bucket), 'conditionalHit'), conditional_split: count(split.filter(x => x.bucket === bucket), 'conditionalHit') })),
-    design: 'Exact dossier-range policy: inner-LOO curve+growth errors estimate age bands and shrinkage; outer test rows are excluded from model, band and odds fits. Hits test the odds-weighted printed range against recorded traded caps; conditional-cap coverage is shown separately. LOO and date-split are cross-sectional snapshot diagnostics, not future-launch calibration.' };
+    design: 'Exact dossier-range policy: inner-LOO errors estimate bands; outer test rows are excluded from fits. Hits test the odds-weighted dossier range against traded caps; conditional-cap coverage shown separately. Cross-sectional diagnostics, not future-launch calibration.' };
 }
 
 export function ablation(peers: Protocol[], asOf: string, median: number) {

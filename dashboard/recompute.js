@@ -1,4 +1,4 @@
-// Pure browser mirror of the build's pricing and farm arithmetic.
+// Browser mirror of build pricing/farm arithmetic.
 (function () {
   'use strict';
   const F = window.FIELD;
@@ -12,7 +12,7 @@
     const curve = Math.exp(F.fit.intercept + F.fit.slope * Math.log(tvl / 1e8));
     const growth = Math.exp(F.fit.momentum * g);
     const seasoning = 0.82 + 0.18 * clamp((r.age_days ?? 730) / 1460, 0, 1);
-    const premium = 1, odds = o.odds ?? r.launch_odds; // category premium removed in v8; pricing is curve × growth × seasoning
+    const premium = 1, odds = o.odds ?? r.launch_odds; // v8: no category premium
     const conditional = clamp(Math.round(curve * growth * seasoning), 1, 1e14);
     return { curve, growth, seasoning, premium, odds, conditional, implied: clamp(Math.round(conditional * odds), 1, 1e14) };
   }
@@ -35,7 +35,6 @@
     const minutes = e.minutes + (weeks - e.weeks) * e.weeklyMinutes;
     const netPerHour = minutes > 0 ? round2(net / (minutes / 60)) : null;
     const reviewDate = new Date(Date.parse(F.as_of) + days * 86400000).toISOString().slice(0, 10);
-    // Renewal/timeline remain explicitly labelled build-scenario research.
     return { ...e, capital, days, airdropShare, altYield, deposit, gasTxs, fees, totalCost, incomeForgone, sliceIfLaunch, expected, net, netAfterYield, breakEvenOdds, verdict, skipReason, weeks, odds, minutes, netPerHour, reviewDate };
   }
   function verify(r) {
