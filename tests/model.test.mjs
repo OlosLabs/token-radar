@@ -270,16 +270,19 @@ test('optimal hold and age-matched ranges are computed per row', () => {
   assert.ok(holds.size >= 3, 'holds must vary across rows');
 });
 
-test('implied value is odds-weighted conditional value with a bounded category premium', () => {
+test('implied value is odds-weighted conditional value; category premium removed in v8', () => {
   for (const row of radar.rows) {
     assert.equal(row.implied_value_usd, Math.max(1, Math.round(row.conditional_value_usd * row.launch_odds)), row.slug);
-    assert.ok(row.category_premium.factor >= 0.5 && row.category_premium.factor <= 2, row.slug);
+    assert.equal(row.category_premium.factor, 1, row.slug);
+    assert.equal(row.category_premium.removed, true, row.slug);
+    assert.equal(row.factors.premium, 1, row.slug);
     assert.ok(row.valuation_sensitivity.no_odds === row.conditional_value_usd, row.slug);
     // Farm slice prices the conditional value; odds enter once via expected.
     const e = row.plan.econ;
     const expectedSlice = Math.round(e.airdropShare * row.conditional_value_usd * e.deposit / row.tvl_usd * 100) / 100;
     assert.ok(Math.abs(e.sliceIfLaunch - expectedSlice) < 0.02, row.slug);
   }
+  // Former estimates stay disclosed for the ablation evidence, bounded as before.
   assert.ok(radar.category_premiums.length >= 5);
   for (const c of radar.category_premiums) {
     assert.ok(c.n >= 1);
@@ -368,7 +371,7 @@ test('production ablation compares conditional-cap factors on identical outer fo
   assert.equal(p.train_n + p.split_n, radar.peers.filter(x => x.listed_at !== null).length);
   assert.deepEqual(p.rows.map(x => x.term), [
     'Flat median multiple', 'Full conditional cap', 'Without TVL', 'Without growth',
-    'Without seasoning', 'Without category', 'Shuffled growth control',
+    'Without seasoning', 'With category premium (removed)', 'Shuffled growth control',
   ]);
   for (const row of p.rows) {
     assert.ok(Number.isFinite(row.loo) && row.loo > 1, row.term);
@@ -377,8 +380,8 @@ test('production ablation compares conditional-cap factors on identical outer fo
   assert.match(p.design, /Odds excluded/);
   const stableRows = radar.rows.map(x => ({slug:x.slug,rank:x.rank,implied:x.implied_value_usd,conditional:x.conditional_value_usd,odds:x.launch_odds,range:x.range,verdict:x.verdict,plan:x.plan,farm_steps:x.farm_steps}));
   assert.equal(createHash('sha256').update(JSON.stringify(stableRows)).digest('hex'),
-    '1bddb10d43fff0af9c6b26499c7678174333dcf11b0d6124e5af83ff4ec59e58',
-    'evidence additions must not alter published values, ranks, ranges, verdicts or plans');
+    'f83460774010f9f6720cfeb2a0b2dc7fe2887cccccebe98ba10cbfe932bdb150',
+    'v8 category removal must match the reviewed projection exactly');
 });
 
 test('nested age-band range coverage excludes outer test outcomes from calibration', async () => {

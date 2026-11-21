@@ -83,11 +83,11 @@
     $('oos-evidence').innerHTML = [renderAblation(), renderBrier(), renderBootstrap(), renderCoverage()].map(html => `<article>${html}</article>`).join('');
     const cohort = data.odds_cohort;
     const premiums = data.category_premiums.filter(c => c.n >= 2).sort((a, b) => b.n - a.n || a.category.localeCompare(b.category, 'en'));
-    $('methods').innerHTML = `<p><b>Formula.</b> value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × category premium × launch odds. g = clamp(7d − median (${data.market_median_change_7d.toFixed(1)}%), ±30)/30; missing = market. Ridge 2/12; slope 0–1.5, growth ±0.25. Pre-odds value in every dossier.</p>
+    $('methods').innerHTML = `<p><b>Formula.</b> value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × launch odds. g = clamp(7d − median (${data.market_median_change_7d.toFixed(1)}%), ±30)/30; missing = market. Ridge 2/12; slope 0–1.5, growth ±0.25. Pre-odds value in every dossier.</p>
       <p><b>Launch odds.</b> ${esc(cohort.disclosure)}</p>
       <table class="sensitivity"><caption>Cohort launch odds / snapshot</caption><thead><tr><th>Age</th><th>n</th><th>Launched</th><th>Raw</th><th>Applied</th></tr></thead><tbody>${cohort.buckets.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.launched}</td><td>${b.n ? oddsPct(b.raw_rate) : 'n/a'}</td><td>${oddsPct(b.rate)}</td></tr>`).join('')}<tr><th>No tracking date</th><td colspan="3">Disclosed prior</td><td>${oddsPct(cohort.prior)}</td></tr></tbody></table>
-      <p><b>Category premium.</b> Median traded gap, shrunk n/(n+5), clamped 0.5–2×; no peers = 1×.</p>
-      <table class="sensitivity"><caption>Category premiums (n ≥ 2)</caption><thead><tr><th>Category</th><th>n</th><th>Raw</th><th>Applied</th></tr></thead><tbody>${premiums.map(c => `<tr><th>${esc(c.category)}</th><td>${c.n}</td><td>${times(c.raw)}</td><td>${times(c.factor)}</td></tr>`).join('')}</tbody></table>
+      <p><b>Category premium — tested, removed in v8.</b> Adding it back worsens both held-out tests (ablation above), so production prices curve × growth × seasoning only. The former per-category estimates stay disclosed below; they no longer enter any value.</p>
+      <table class="sensitivity"><caption>Former category premiums (n ≥ 2) — not applied</caption><thead><tr><th>Category</th><th>n</th><th>Raw</th><th>Former factor</th></tr></thead><tbody>${premiums.map(c => `<tr><th>${esc(c.category)}</th><td>${c.n}</td><td>${times(c.raw)}</td><td>${times(c.factor)}</td></tr>`).join('')}</tbody></table>
       <p><b>Seasoning.</b> 0.82 + 0.18 × min(days/1460, 1); missing = 730d. A haircut, not launch probability.</p>
       <p>Tracking-date cutoff: ${wf.cutoff_date}. Overlapping LOO folds are descriptive, not significance tests.</p>
       <p><b>Top-10, TVL-only refit:</b> ${validation.top_rank_sensitivity.map(r => `${esc(bySlug.get(r.slug).name)} #${r.rank}→#${r.tvl_only_rank}`).join('; ')}. Not tuned on.</p>
@@ -105,10 +105,14 @@
       if (i === 0) return 'baseline';
       if (i === 1) return 'production';
       if (/shuffled/i.test(r.term)) return 'negative control';
+      if (/removed/i.test(r.term)) {
+        const worse = r.loo != null && r.split != null && r.loo > full.loo && r.split > full.split;
+        return worse ? 'removed — hurts both folds' : 'removed — mixed evidence';
+      }
       const worse = (r.loo != null && r.loo > full.loo) && (r.split != null && r.split > full.split);
       return worse ? 'kept — hurts both folds' : 'kept — mixed evidence';
     };
-    return `<p><b>Production conditional-cap ablation.</b> Each row removes one shipped factor; every variant refits on identical held-out folds. Descriptive evidence only; no production term selection.</p>
+    return `<p><b>Production conditional-cap ablation.</b> Each row removes one shipped factor — except the category row, which adds the removed v7 term back; every variant refits on identical held-out folds. Descriptive evidence only; no production term selection.</p>
       <table class="sensitivity"><caption>Median absolute multiplicative miss · lower is better · Δ vs full (positive = worse)</caption><thead><tr><th>Variant</th><th>LOO n=${a.loo_n} miss (Δ)</th><th>Date-split n=${a.split_n} miss (Δ)</th><th>Verdict</th></tr></thead><tbody>${a.rows.map((r,i)=>`<tr><th>${esc(r.term)}</th><td>${cell(r.loo,full.loo,i)}</td><td>${cell(r.split,full.split,i)}</td><td>${status(r,i)}</td></tr>`).join('')}</tbody></table>
       <p class="muted">${esc(a.design)}</p>`;
   }
@@ -234,7 +238,7 @@
         <h3>Model economics / disclosed assumptions</h3>${modelLedger}${whatIf}
       </article><article>${proof}<h3>Valuation ledger</h3>${ledger([
         ['Peer curve at this TVL', usd(f.curve)], ['Weekly TVL factor', `${f.growth.toFixed(4)}×`], ['Tracking days / seasoning', `${r.age_days ?? 'Unreported'} / ${f.age.toFixed(4)}×`],
-        ['Category premium', `${f.premium.toFixed(4)}× (n=${r.category_premium.n})`], ['Launch odds (cohort)', oddsPct(r.launch_odds)],
+        ['Category premium (removed v8)', `1.0000× applied · former estimate ${r.category_premium.raw.toFixed(3)}× (n=${r.category_premium.n})`], ['Launch odds (cohort)', oddsPct(r.launch_odds)],
         ['Value if launched (whole USD)', new Intl.NumberFormat('en-US').format(r.conditional_value_usd)],
         ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], ['Error-based range (age-matched ×' + r.range_factor.toFixed(2) + ')', range(r)],
  ['Rank across 200 bootstrap refits', `#${r.rank_range[0]}–#${r.rank_range[1]} (published #${r.rank})`],

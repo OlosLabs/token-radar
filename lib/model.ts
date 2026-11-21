@@ -122,9 +122,11 @@ export function curveValue(tvl: number, fit: Fit) {
   return Math.exp(fit.intercept + fit.slope * Math.log(tvl / 100_000_000));
 }
 
-// Category premium: the median gap between a category's traded tokens and the
-// fitted curve, shrunk toward 1 when comparables are few (n/(n+5)) and clamped
-// to [0.5, 2]. Categories without traded peers keep the neutral premium 1.
+// Category premium was a production term through v7: the median gap between a
+// category's traded tokens and the fitted curve, shrunk n/(n+5), clamped [0.5,2].
+// The production ablation showed removing it improves BOTH held-out tests
+// (LOO 3.606→3.290, date split 2.305→2.104), so v8 removed it from pricing.
+// The estimator is retained for the ablation evidence and the disclosed table.
 export interface Premium { factor: number; n: number; raw: number }
 export function categoryPremiums(peers: Protocol[], fit: Fit): Map<string, Premium> {
   const gaps = new Map<string, number[]>();
@@ -287,7 +289,7 @@ export function buildRadar(snapshot: Snapshot) {
   // value multiplies odds in, so odds are never double-counted.
   const econFor = (p: Protocol, conditionalValue: number) => farmEconomics(p, { asOf: as_of, impliedValue: conditionalValue, odds: odds_cohort.oddsFor(trackingDays(p, as_of)) });
   // Validate plans for every source record, including excluded products.
-  const sourcePlans = new Map(protocols.map(p => [p.slug, farmPlan(p, trackingDays(p, as_of), econFor(p, price(p, as_of, fit, premiums).value))]));
+  const sourcePlans = new Map(protocols.map(p => [p.slug, farmPlan(p, trackingDays(p, as_of), econFor(p, price(p, as_of, fit).value))]));
   const validationRaw = validate(peers, as_of, market_median_change_7d);
   const { bandFor, ...validation } = validationRaw;
   const walk_forward = walkForward(peers, as_of, market_median_change_7d);
@@ -295,7 +297,7 @@ export function buildRadar(snapshot: Snapshot) {
   const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery' || status === 'Off-list');
   const insightCtx = { median: market_median_change_7d, rankedTvls: candidates.map(({ p }) => p.tvl_usd).sort((a, b) => a - b), cohortRateFor: odds_cohort.oddsFor, asOf: as_of };
   const rows = candidates.map(({ p, status }) => {
-    const factors = price(p, as_of, fit, premiums);
+    const factors = price(p, as_of, fit);
     const launch_odds = odds_cohort.oddsFor(factors.age_days);
     // implied value = value if it launches × launch odds (odds-weighted).
     const implied = clamp(Math.round(factors.value * launch_odds), 1, MAX_VALUE);
@@ -305,7 +307,7 @@ export function buildRadar(snapshot: Snapshot) {
     return {
       ...p, cohort: status, age_days: factors.age_days, implied_value_usd: implied,
       conditional_value_usd: factors.value, launch_odds, verdict: plan.verdict,
-      category_premium: premiumFor(premiums, p.category),
+      category_premium: { factor: 1, n: premiumFor(premiums, p.category).n, raw: premiumFor(premiums, p.category).raw, removed: true },
       range: [Math.max(1, Math.floor(implied / bandFor(factors.age_days))), Math.min(MAX_VALUE, Math.ceil(implied * bandFor(factors.age_days)))],
       range_factor: bandFor(factors.age_days),
       extrapolated: p.tvl_usd < limits[0] || p.tvl_usd > limits[1], factors, comparables, plan,

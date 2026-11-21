@@ -40,8 +40,10 @@ test('negative-control deltas independently reconcile; improves LOO but worsens 
   assert.equal(a.control_wf_delta, control.wf_miss - curveGrowth.wf_miss);
   assert.ok(a.control_loo_delta < 0 && a.control_wf_delta > 0);
   assert.equal(a.control_helps, false);
-  // Experiments do not remove the shipped growth/age/category factors.
-  assert.ok(radar.rows.some(r => r.factors.growth !== 1 && r.factors.age !== 1 && r.factors.premium !== 1));
+  // Experiments do not remove the shipped growth/age factors; the category
+  // premium was removed in v8 after both held-out tests worsened with it.
+  assert.ok(radar.rows.some(r => r.factors.growth !== 1 && r.factors.age !== 1));
+  assert.ok(radar.rows.every(r => r.factors.premium === 1));
 });
 test('coverage is independently reproduced from global curve + growth errors, not dossier bands', () => {
   const peers = radar.peers, median = radar.market_median_change_7d;

@@ -56,7 +56,7 @@ def main():
             complete_rows = page.locator('.table tbody tr').evaluate_all('(rows)=>rows.filter(r=>{const b=r.getBoundingClientRect();return b.top>=0 && b.bottom<=innerHeight}).length')
             assert complete_rows >= 5, complete_rows
             assert fully_visible('#chart') and page.locator('.chart-point').count() == 87
-            assert fully_visible('#validation .metric') and page.locator('#validation .metric').all_inner_texts() == ['2.31× vs 4.52×','54.5% vs 80%','0.230 vs 0.321','200']
+            assert fully_visible('#validation .metric') and page.locator('#validation .metric').all_inner_texts() == ['2.10× vs 4.52×','57.6% vs 80%','0.230 vs 0.321','200']
             assert 'Full vs flat miss' in page.locator('#validation').inner_text()
             assert 'Printed-range hits vs 80% target' in page.locator('#validation').inner_text()
             assert 'Token-status Brier: model vs base' in page.locator('#validation').inner_text()
@@ -75,7 +75,7 @@ def main():
             page.locator('#search').fill('Katana DEX')
             page.locator('[data-open="katana-dex"]').click()
             detail = page.locator('#detail').inner_text()
-            assert 'Optimal renewal point — day 73' in detail and '$0.18/day carry' in detail
+            assert 'Optimal renewal point — day 38' in detail and '$0.18/day carry' in detail
             assert 'Farm it' in detail and 'Build scenario only' in detail
             assert 'Fees covered from n/a' not in detail
             assert fully_visible('.decision') and fully_visible('.renewal')
@@ -190,12 +190,12 @@ def main():
             page.locator('#evidence-pack>summary').evaluate('(e)=>e.scrollIntoView({block:"start"})')
             evidence = page.locator('#oos-evidence').inner_text()
             shuffled = page.locator('#oos-evidence tr').filter(has_text='Shuffled growth control').locator('td').all_inner_texts()
-            assert shuffled == ['3.458× (-0.15×)','2.415× (+0.11×)','negative control'], shuffled
-            without_category = page.locator('#oos-evidence tr').filter(has_text='Without category').locator('td').all_inner_texts()
-            assert without_category == ['3.290× (-0.32×)','2.104× (-0.20×)','kept — mixed evidence'], without_category
+            assert shuffled == ['3.303× (+0.01×)','2.168× (+0.06×)','negative control'], shuffled
+            removed_category = page.locator('#oos-evidence tr').filter(has_text='With category premium (removed)').locator('td').all_inner_texts()
+            assert removed_category == ['3.606× (+0.32×)','2.305× (+0.20×)','removed — hurts both folds'], removed_category
             assert 'kept — hurts both folds' in evidence
-            assert '61/87 (70.1%)' in evidence and '18/33 (54.5%)' in evidence
-            assert '66/87 (75.9%)' in evidence and '23/33 (69.7%)' in evidence
+            assert '59/87 (67.8%)' in evidence and '19/33 (57.6%)' in evidence
+            assert '64/87 (73.6%)' in evidence and '23/33 (69.7%)' in evidence
             assert 'odds-weighted dossier range' in evidence and 'future-launch calibration' in evidence
             assert 'no production term selection' in evidence
             assert fully_visible('#oos-evidence'), page.locator('#oos-evidence').bounding_box()

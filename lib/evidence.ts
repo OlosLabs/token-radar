@@ -83,15 +83,13 @@ function medianMiss(errors: number[]) {
   return Math.exp(quantile(errors.map(Math.abs), 0.5));
 }
 
-const modes = ['Flat median multiple', 'Full conditional cap', 'Without TVL', 'Without growth', 'Without seasoning', 'Without category', 'Shuffled growth control'] as const;
+const modes = ['Flat median multiple', 'Full conditional cap', 'Without TVL', 'Without growth', 'Without seasoning', 'With category premium (removed)', 'Shuffled growth control'] as const;
 function conditionalFold(train: Protocol[], test: Protocol[], asOf: string) {
   const median = marketMedianChange(train);
   const full = fitCurve(train, true, median);
   const noTvl = fitCurve(train, true, median, false);
   const noGrowth = fitCurve(train, false, median);
   const premiums = categoryPremiums(train, full);
-  const tvlPremiums = categoryPremiums(train, noTvl);
-  const growthPremiums = categoryPremiums(train, noGrowth);
   const flat = quantile(train.map(t => capLog(t) - Math.log(t.tvl_usd)), 0.5);
   const rand = mulberry32(0xA81A710);
   const growth = train.map(t => t.change_7d);
@@ -101,16 +99,15 @@ function conditionalFold(train: Protocol[], test: Protocol[], asOf: string) {
   }
   const shuffled = train.map((t, i) => ({ ...t, change_7d: growth[i] }));
   const controlFit = fitCurve(shuffled, true, median);
-  const controlPremiums = categoryPremiums(shuffled, controlFit);
   return test.map(p => {
-    const priced = price(p, asOf, full, premiums);
+    const priced = price(p, asOf, full);
     let seed = 0xA81A710;
     for (const c of p.slug) seed = Math.imul(seed ^ c.charCodeAt(0), 16777619);
     const control = { ...p, change_7d: growth[Math.floor(mulberry32(seed)() * growth.length)] };
     return [Math.log(p.tvl_usd) + flat, Math.log(priced.value),
-      Math.log(price(p, asOf, noTvl, tvlPremiums).value), Math.log(price(p, asOf, noGrowth, growthPremiums).value),
-      Math.log(clamp(Math.round(priced.curve * priced.growth * priced.premium), 1, MAX_VALUE)), Math.log(price(p, asOf, full).value),
-      Math.log(price(control, asOf, controlFit, controlPremiums).value)];
+      Math.log(price(p, asOf, noTvl).value), Math.log(price(p, asOf, noGrowth).value),
+      Math.log(clamp(Math.round(priced.curve * priced.growth), 1, MAX_VALUE)), Math.log(price(p, asOf, full, premiums).value),
+      Math.log(price(control, asOf, controlFit).value)];
   });
 }
 
@@ -130,13 +127,12 @@ export function productionAblation(peers: Protocol[], asOf: string) {
   const miss = (xs: number[][], i: number) => xs.length ? medianMiss(xs.map(x => x[i])) : null;
   return { loo_n: loo.length, train_n: train.length, split_n: split.length,
     rows: modes.map((term, i) => ({ term, loo: miss(loo, i), split: miss(split, i) })),
-    design: 'Fixed identical folds; fold-local median and category premiums. Removing TVL or growth refits the curve and premiums; seasoning/category are neutralized. Control permutes training growth and assigns held-out growth by a seeded slug draw from training. Odds excluded: target is traded conditional cap.' };
+    design: 'Fixed identical folds; fold-local median. The production model prices curve × growth × seasoning; the category-premium row adds the removed v7 term back. Removing TVL or growth refits the curve; seasoning is neutralized. Control permutes training growth and assigns held-out growth by a seeded slug draw from training. Odds excluded: target is traded conditional cap.' };
 }
 
 export function coverageFold(train: Protocol[], test: Protocol[], asOf: string, oddsUniverse: Protocol[] = train) {
   const median = marketMedianChange(train);
   const fit = fitCurve(train, true, median);
-  const premiums = categoryPremiums(train, fit);
   // Recreate the shipped age-band estimator using inner-LOO growth-only errors.
   const calibrationErrors = train.map((p, i) => {
     const inner = train.filter((_, j) => j !== i);
@@ -147,7 +143,7 @@ export function coverageFold(train: Protocol[], test: Protocol[], asOf: string, 
   const oddsModel = cohortOdds(oddsUniverse, asOf);
   return test.map(p => {
     const age = trackingDays(p, asOf);
-    const conditional = price(p, asOf, fit, premiums).value;
+    const conditional = price(p, asOf, fit).value;
     const odds = oddsModel.oddsFor(age);
     const implied = clamp(Math.round(conditional * odds), 1, MAX_VALUE);
     const factor = bandFor(age);
@@ -302,13 +298,11 @@ export function bootstrap(peers: Protocol[], asOf: string, median: number, rowIn
     let fit: Fit;
     try { fit = fitCurve(sample, true, median); } catch { continue; }
     slopes.push(fit.slope); momenta.push(fit.momentum); intercepts.push(fit.intercept);
-    const premiums = categoryPremiumsLocal(sample, fit, median);
     const values = rowInputs.map(r => {
       const curve = curveValue(r.tvl_usd, fit);
       const growth = Math.exp(fit.momentum * growthInput({ change_7d: r.change_7d } as Protocol, median));
       const age = maturity(r.age_days);
-      const prem = (r.category && premiums.get(r.category)) || 1;
-      return { slug: r.slug, v: curve * growth * age * prem * r.launch_odds };
+      return { slug: r.slug, v: curve * growth * age * r.launch_odds };
     }).sort((a, b2) => b2.v - a.v || lexical(a.slug, b2.slug));
     values.forEach((v, i) => rankLists.get(v.slug)!.push(i + 1));
   }
@@ -325,7 +319,7 @@ export function bootstrap(peers: Protocol[], asOf: string, median: number, rowIn
     slope_se: se(slopes), momentum_se: se(momenta), intercept_se: se(intercepts),
     slope_p10_p90: [quantile(slopes, 0.1), quantile(slopes, 0.9)],
     rank_range,
-    design: '200 bootstrap resamples of the traded-peer set, refit end to end (curve, premiums), re-pricing every board row at its published odds. Rank range is the min–max across refits, not a confidence interval.',
+    design: '200 bootstrap resamples of the traded-peer set, refit end to end (curve), re-pricing every board row at its published odds. Rank range is the min–max across refits, not a confidence interval.',
   };
 }
 

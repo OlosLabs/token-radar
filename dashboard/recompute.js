@@ -12,8 +12,8 @@
     const curve = Math.exp(F.fit.intercept + F.fit.slope * Math.log(tvl / 1e8));
     const growth = Math.exp(F.fit.momentum * g);
     const seasoning = 0.82 + 0.18 * clamp((r.age_days ?? 730) / 1460, 0, 1);
-    const premium = o.premium ?? r.category_premium.factor, odds = o.odds ?? r.launch_odds;
-    const conditional = clamp(Math.round(curve * growth * seasoning * premium), 1, 1e14);
+    const premium = 1, odds = o.odds ?? r.launch_odds; // category premium removed in v8; pricing is curve × growth × seasoning
+    const conditional = clamp(Math.round(curve * growth * seasoning), 1, 1e14);
     return { curve, growth, seasoning, premium, odds, conditional, implied: clamp(Math.round(conditional * odds), 1, 1e14) };
   }
   function farmRow(r, s = {}) {

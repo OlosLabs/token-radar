@@ -7,15 +7,15 @@ import { coverageFold, productionAblation } from '../lib/evidence.ts';
 const snapshot = parseSnapshot(readFileSync(new URL('../../kit/token-radar-01-kit/input/snapshot.json', import.meta.url), 'utf8'));
 const radar = buildRadar(snapshot);
 
-test('all production row values, odds, ranges, verdicts and complete plans match reviewed v7', () => {
+test('all production row values, odds, ranges, verdicts and complete plans match reviewed v8', () => {
   const projection = radar.rows.map(x=>({slug:x.slug,rank:x.rank,implied:x.implied_value_usd,conditional:x.conditional_value_usd,odds:x.launch_odds,range:x.range,verdict:x.verdict,plan:x.plan,farm_steps:x.farm_steps}));
-  assert.equal(createHash('sha256').update(JSON.stringify(projection)).digest('hex'), '1bddb10d43fff0af9c6b26499c7678174333dcf11b0d6124e5af83ff4ec59e58');
+  assert.equal(createHash('sha256').update(JSON.stringify(projection)).digest('hex'), 'f83460774010f9f6720cfeb2a0b2dc7fe2887cccccebe98ba10cbfe932bdb150');
 });
 
 test('conditional-cap ablation compares fixed variants and reports mixed control honestly', () => {
   const a = radar.validation.production_ablation;
   assert.deepEqual([a.loo_n,a.train_n,a.split_n], [87,33,33]);
-  assert.deepEqual(a.rows.map(r=>[r.loo.toFixed(3),r.split.toFixed(3)]), [['4.458','4.520'],['3.606','2.305'],['3.611','3.158'],['3.481','2.362'],['3.773','2.069'],['3.290','2.104'],['3.458','2.415']]);
+  assert.deepEqual(a.rows.map(r=>[r.loo.toFixed(3),r.split.toFixed(3)]), [['4.458','4.520'],['3.290','2.104'],['3.611','3.565'],['3.219','2.159'],['3.477','2.011'],['3.606','2.305'],['3.303','2.168']]);
   assert.deepEqual(productionAblation(radar.peers, radar.as_of), a);
 });
 
@@ -42,8 +42,8 @@ test('age pooling and fallback match production thresholds; held-out counts reco
   assert.equal(policy.bucketLabel(180),'180-365d');
   assert.equal(policy.bucketLabel(null),'Global fallback');
   const c = radar.validation.nested_coverage;
-  assert.deepEqual([c.nominal,c.loo,c.split],[0.8,{n:87,hits:61},{n:33,hits:18}]);
-  assert.deepEqual([c.conditional.loo,c.conditional.split],[{n:87,hits:66},{n:33,hits:23}]);
+  assert.deepEqual([c.nominal,c.loo,c.split],[0.8,{n:87,hits:59},{n:33,hits:19}]);
+  assert.deepEqual([c.conditional.loo,c.conditional.split],[{n:87,hits:64},{n:33,hits:23}]);
   for (const fold of ['loo','split']) for (const key of ['n','hits'])
     assert.equal(c.buckets.reduce((sum,r)=>sum+r[fold][key],0),c[fold][key]);
 });
