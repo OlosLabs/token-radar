@@ -30,7 +30,8 @@ function run() {
   const snapshot_sha256 = createHash('sha256').update(bytes).digest('hex');
   const radar = { ...buildRadar(parseSnapshot(bytes.toString('utf8'))), snapshot_sha256 };
   const { rows, counts, as_of, source, fit, validation, exclusions, plan_audit } = radar;
-  const board = json({ as_of, source, snapshot_sha256, counts, fit, market_median_change_7d: radar.market_median_change_7d, validation, exclusions, plan_audit,
+  const main_sha256 = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex').slice(0, 8);
+  const board = json({ as_of, source, snapshot_sha256, main_sha256, counts, fit, market_median_change_7d: radar.market_median_change_7d, validation, exclusions, plan_audit, ledger: radar.ledger,
     odds_cohort: radar.odds_cohort, category_premiums: radar.category_premiums, econ_defaults: radar.econ_defaults, rows });
   if (Buffer.byteLength(board) > 8 * 1024 * 1024) throw new Error('board.json exceeds the 8 MiB gate cap.');
   for (const { slug, farm_steps } of rows) {
@@ -47,7 +48,7 @@ function run() {
   if (imageCount < 3 || imageCount > 4) throw new Error('Include three or four browser captures under screenshots/.');
   writeFileSync(join(out, 'board.json'), board);
   // Embed data in a local script, served beside dashboard/ so its dossier text stays readable.
-  writeFileSync(join(out, 'data.js'), `window.FIELD = ${json(radar).trim().replace(/</g, '\\u003c')};\n`);
+  writeFileSync(join(out, 'data.js'), `window.FIELD = ${json({ ...radar, main_sha256 }).trim().replace(/</g, '\\u003c')};\n`);
   writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: 65536 }));
   console.log(`fieldbook: ${as_of}; ${counts.ranked}/${counts.total} ranked; ${counts.covered}/${counts.watch} watchlist; ${radar.peers.length} traded observations; ${imageCount} captures`);
 }

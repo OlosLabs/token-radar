@@ -27,9 +27,11 @@ test('kit snapshot bytes and source identity are preserved', () => {
 });
 
 test('all watchlist records and at least 60 additional eligible discoveries rank', () => {
-  assert.equal(radar.rows.length, 190);
+  assert.equal(radar.rows.length, 203);
   assert.equal(radar.counts.covered, 40);
   assert.equal(radar.counts.discovery, 150);
+  assert.equal(radar.counts.offlist, 13);
+  assert.ok(radar.rows.filter(p => p.cohort === 'Off-list').every(p => /\s(?:v\d+(?:\.\d+)*|\d+\.\d+)$|\b(?:wrapped|staked|staking)\b/i.test(p.name)));
   assert.ok(snapshot.watchlist.every(slug => radar.rows.some(p => p.slug === slug)));
   assert.ok(radar.rows.some(p => p.tvl_usd < snapshot.floor_usd));
   assert.equal(new Set(radar.rows.map(p => p.slug)).size, radar.rows.length);
@@ -174,8 +176,8 @@ test('explicit hypothetical pool/deposits never depend on market cap or TVL, inc
   for (const overrides of [{ whatif: 0 }, { deposits: 0 }, { capital: 0 }, { pool: -1 }, { prob: NaN }]) {
     assert.equal(economics(row, { ...s, ...overrides }), null);
   }
-  // Explicit synthetic test: a verified route can calculate without the research override.
-  assert.ok(economics({ ...row, plan: { ...row.plan, research: false } }, { ...s, whatif: 0 }));
+  // Disabling what-if must remove its stale result on every route, not just research rows.
+  for (const candidate of radar.rows) assert.equal(economics(candidate, { ...s, whatif: 0 }), null);
 });
 
 test('same-fold residuals independently reproduce held-out estimates and error summaries', () => {
@@ -320,4 +322,84 @@ test('oddsFor interpolates monotonically, uses the disclosed prior, and deposits
     assert.equal(row.plan.bps, row.plan.econ.bps, row.slug);
     assert.ok(Number.isFinite(row.plan.fixed) && row.plan.fixed >= 0, row.slug);
   }
+});
+
+test('evidence pack: candidate both-test flags, mixed control result and ledger reconcile', () => {
+  const v = radar.validation;
+  const ta = v.term_ablation;
+  assert.equal(ta.rows.length, 7);
+  assert.ok(ta.rows[0].term.startsWith('Flat'));
+  assert.ok(ta.rows.at(-1).control);
+  // The size curve must survive both tests; the control must not beat the model in both.
+  assert.ok(ta.rows[1].kept);
+  assert.equal(ta.control_helps, false);
+  for (const r of ta.rows) {
+    assert.ok(r.loo_miss > 1 && r.wf_miss > 1, r.term);
+    if (r.kept) assert.ok(!r.control);
+  }
+  const ob = v.odds_brier;
+  assert.ok(ob.n_peers > 600 && ob.n_launched > 200);
+  assert.ok(ob.tenfold.model_brier < ob.tenfold.base_brier);
+  assert.ok(ob.walk_forward.model_brier < ob.walk_forward.base_brier);
+  assert.ok(ob.walk_forward.model_called_right > ob.walk_forward.base_called_right);
+  const bs = v.bootstrap;
+  assert.equal(bs.refits, 200);
+  assert.ok(bs.slope_se > 0 && bs.slope_se < 1);
+  assert.ok(bs.momentum_se > 0);
+  assert.ok(!('rank_range' in bs), 'per-row ranges live on rows, not the summary');
+  for (const row of radar.rows) {
+    assert.ok(Array.isArray(row.rank_range) && row.rank_range.length === 2, row.slug);
+    assert.ok(row.rank_range[0] <= row.rank && row.rank <= row.rank_range[1], row.slug);
+  }
+  const ic = v.interval_coverage;
+  assert.ok(ic.loo.inside_stated_80 > 0.7 && ic.loo.inside_stated_80 < 0.9);
+  assert.ok(ic.wf.inside_stated_80 > 0.5 && ic.wf.inside_stated_80 <= 1);
+  const l = radar.ledger;
+  assert.equal(l.total, 758);
+  assert.ok(l.reconciles);
+  assert.equal(l.groups.ranked_watchlist, 40);
+  assert.equal(l.groups.ranked_watchlist + l.groups.ranked_below_floor + l.groups.ranked_other, radar.rows.length);
+  assert.equal(l.groups.recorded_priced + l.groups.recorded_unpriced, 416);
+});
+
+test('production ablation compares conditional-cap factors on identical outer folds', () => {
+  const p = radar.validation.production_ablation;
+  assert.equal(p.loo_n, radar.peers.length);
+  assert.equal(p.train_n + p.split_n, radar.peers.filter(x => x.listed_at !== null).length);
+  assert.deepEqual(p.rows.map(x => x.term), [
+    'Flat median multiple', 'Full conditional cap', 'Without TVL', 'Without growth',
+    'Without seasoning', 'Without category', 'Shuffled growth control',
+  ]);
+  for (const row of p.rows) {
+    assert.ok(Number.isFinite(row.loo) && row.loo > 1, row.term);
+    assert.ok(Number.isFinite(row.split) && row.split > 1, row.term);
+  }
+  assert.match(p.design, /Odds excluded/);
+  const stableRows = radar.rows.map(x => ({slug:x.slug,rank:x.rank,implied:x.implied_value_usd,conditional:x.conditional_value_usd,odds:x.launch_odds,range:x.range,verdict:x.verdict,plan:x.plan,farm_steps:x.farm_steps}));
+  assert.equal(createHash('sha256').update(JSON.stringify(stableRows)).digest('hex'),
+    '1bddb10d43fff0af9c6b26499c7678174333dcf11b0d6124e5af83ff4ec59e58',
+    'evidence additions must not alter published values, ranks, ranges, verdicts or plans');
+});
+
+test('nested age-band range coverage excludes outer test outcomes from calibration', async () => {
+  const { coverageFold, nestedCoverage } = await import('../lib/evidence.ts');
+  const peers = [...radar.peers];
+  const dated = peers.filter(p => p.listed_at !== null).sort((a,b) => a.listed_at < b.listed_at ? -1 : a.listed_at > b.listed_at ? 1 : a.slug.localeCompare(b.slug));
+  const cut = Math.floor(dated.length / 2), train = dated.slice(0, cut), testRows = dated.slice(cut);
+  const splitRows = coverageFold(train, testRows, snapshot.as_of, snapshot.protocols.filter(p => p.listed_at && p.listed_at <= train.at(-1).listed_at));
+  const actual = nestedCoverage(snapshot.protocols, peers, snapshot.as_of);
+  assert.equal(actual.loo.n, peers.length);
+  assert.equal(actual.split.n, testRows.length);
+  assert.equal(actual.split.hits, splitRows.filter(x => x.hit).length);
+  for (const row of splitRows) {
+    const altered = {...testRows.find(p => p.slug === row.slug), mcap_usd: 999999999999};
+    const again = coverageFold(train, [altered], snapshot.as_of, snapshot.protocols.filter(p => p.listed_at && p.listed_at <= train.at(-1).listed_at))[0];
+    assert.deepEqual([again.center,again.factor,again.low,again.high,again.bucket], [row.center,row.factor,row.low,row.high,row.bucket]);
+  }
+  assert.match(actual.design, /outer test rows are excluded/);
+  assert.ok(actual.buckets.some(x => x.bucket === 'Global fallback'));
+  const looRows = peers.flatMap((p,i) => coverageFold(peers.filter((_,j) => j!==i), [p], snapshot.as_of, snapshot.protocols.filter(x => x.slug !== p.slug)));
+  assert.equal(actual.loo.hits, looRows.filter(x=>x.hit).length);
+  const changed = coverageFold(train, [{...testRows[0],mcap_usd:1}], snapshot.as_of, snapshot.protocols.filter(p => p.listed_at && p.listed_at <= train.at(-1).listed_at))[0];
+  assert.deepEqual([changed.center,changed.factor,changed.low,changed.high,changed.bucket], [splitRows[0].center,splitRows[0].factor,splitRows[0].low,splitRows[0].high,splitRows[0].bucket]);
 });

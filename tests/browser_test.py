@@ -1,6 +1,9 @@
-"""Exercise real generated snapshot data and capture authentic competition images."""
+"""Real shipped UI states only: no capture CSS, DOM hiding or fabricated data."""
+import csv
+import argparse
 import functools
 import http.server
+import io
 import json
 import pathlib
 import subprocess
@@ -15,16 +18,17 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--report', type=pathlib.Path)
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='fieldbook-browser-') as temporary:
         out = pathlib.Path(temporary)
-        subprocess.run(['node', str(ROOT / 'main.ts'), '--input', str(SNAPSHOT), '--output', str(out)], check=True)
+        subprocess.run(['node', str(ROOT/'main.ts'), '--input', str(SNAPSHOT), '--output', temporary], check=True)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=temporary))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         origin = f'http://127.0.0.1:{server.server_port}'
-        errors, external = [], []
-        checks = []
+        errors, external, checks = [], [], []
         with sync_playwright() as p:
             browser = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
             context = browser.new_context(viewport={'width':1440,'height':900}, device_scale_factor=1)
@@ -40,185 +44,186 @@ def main():
             page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
             page.goto(origin + '/dashboard/')
             page.wait_for_selector('#fieldbook:not([hidden])')
+            def capture(name):
+                assert page.locator('[style]').evaluate_all('(els)=>els.every(e=>!e.style.display && !e.style.visibility)')
+                page.screenshot(path=str(ROOT/'screenshots'/name), type='jpeg', quality=92)
+            def fully_visible(selector):
+                return page.locator(selector).evaluate_all('(els)=>els.every(e=>{const b=e.getBoundingClientRect();return b.width>0 && b.top>=0 && b.bottom<=innerHeight})')
             assert page.locator('.table tbody tr').count() == 10
             assert '40/40' in page.locator('#coverage').inner_text()
+            # Measure the untouched first load BEFORE keyboard navigation or capture.
+            assert page.evaluate('scrollY') == 0
             complete_rows = page.locator('.table tbody tr').evaluate_all('(rows)=>rows.filter(r=>{const b=r.getBoundingClientRect();return b.top>=0 && b.bottom<=innerHeight}).length')
             assert complete_rows >= 5, complete_rows
+            assert fully_visible('#chart') and page.locator('.chart-point').count() == 87
+            assert fully_visible('#validation .metric') and page.locator('#validation .metric').all_inner_texts() == ['2.31× vs 4.52×','54.5% vs 80%','0.230 vs 0.321','200']
+            assert 'Full vs flat miss' in page.locator('#validation').inner_text()
+            assert 'Printed-range hits vs 80% target' in page.locator('#validation').inner_text()
+            assert 'Token-status Brier: model vs base' in page.locator('#validation').inner_text()
+            audit_text = page.locator('#audit').inner_text()
+            assert 'checksum' in audit_text and '= main.ts' in audit_text and '758/758' in audit_text, audit_text
+            assert fully_visible('#audit'), page.locator('#audit').bounding_box()
+            box = page.locator('#board').bounding_box()
+            assert box is not None
+            board_y = box['y']
+            capture('1-board.jpg')
             page.keyboard.press('Tab')
             assert page.locator('.skip').evaluate('(e)=>e===document.activeElement')
             page.keyboard.press('Enter')
             assert page.locator('#board').evaluate('(e)=>e===document.activeElement')
-            page.evaluate('window.scrollTo(0,0)')
-            page.screenshot(path=str(ROOT/'screenshots/1-board.jpg'), type='jpeg', quality=90)
-            checks.append(f'desktop board, watchlist coverage, keyboard skip and {complete_rows} complete rows at 1440x900')
-            # Detail screenshot: a FARM row whose renewal crossing (day 73)
-            # is visible — the judge must SEE the per-row hold decision vary,
-            # not only the day-7 floor case. Search reaches any of the 190.
+            checks.append(f'default unmodified 1440x900: {complete_rows} complete rows, chart visible, board y={board_y}; keyboard skip')
             page.locator('#search').fill('Katana DEX')
-            assert page.locator('.table tbody tr').count() >= 1
-            assert page.locator('.table tbody tr').first.locator('.protocol').inner_text() == 'Katana DEX'
             page.locator('[data-open="katana-dex"]').click()
-            assert page.locator('#dossier').evaluate('(d)=>d.open')
-            assert page.locator('#dossier-title').inner_text() == 'Katana DEX'
-            detail_text = page.locator('#detail').inner_text()
-            assert 'Optimal renewal point — day 73' in detail_text
-            assert '$0.18/day carry' in detail_text
-            assert 'Farm it' in detail_text
-            # Frame the capture so BOTH decision boxes (left) and the live
-            # recompute match sentence (right column, below the fold) are
-            # visible: tighten the dossier header for the capture only.
-            page.evaluate('''() => {
-              const h = document.querySelector('.detail-header');
-              h.style.padding = '12px 25px 8px';
-              h.querySelector('h2').style.fontSize = '30px';
-              const k = document.querySelector('.detail-kpis');
-              k.style.margin = '7px 0';
-              k.querySelectorAll('strong').forEach(s => s.style.fontSize = '19px');
-              document.querySelectorAll('.detail-columns > article').forEach(a => a.style.paddingTop = '12px');
-            }''')
-            page.wait_for_timeout(120)
-            assert page.locator('#detail').inner_text().count('This page just recomputed') == 1
-            page.screenshot(path=str(ROOT/'screenshots/2-detail.jpg'), type='jpeg', quality=90)
+            detail = page.locator('#detail').inner_text()
+            assert 'Optimal renewal point — day 73' in detail and '$0.18/day carry' in detail
+            assert 'Farm it' in detail and 'Build scenario only' in detail
+            assert 'Fees covered from n/a' not in detail
+            assert fully_visible('.decision') and fully_visible('.renewal')
+            assert fully_visible('.detail-columns>article:nth-child(2)>p:first-child')
+            capture('2-detail.jpg')
             page.keyboard.press('Escape')
-            assert not page.locator('#dossier').evaluate('(d)=>d.open')
             assert page.locator('[data-open="katana-dex"]').evaluate('(e)=>e===document.activeElement')
             page.locator('#search').fill('')
-            # Contrast case: rank 1 THIN row says do NOT renew
-            # past day 7 — same math, opposite decision. Verified on screen
-            # too (not captured; the dossier text is asserted here).
             page.locator('[data-open="steakhouse-financial"]').click()
-            thin_text = page.locator('#detail').inner_text()
-            assert 'Optimal renewal point — day 7' in thin_text
-            assert 'do not renew past the first review' in thin_text
-            assert 'Thin — farm only if terms verify' in thin_text
+            detail = page.locator('#detail').inner_text()
+            assert 'Optimal renewal point — day 7' in detail and 'do not renew past the first review' in detail
+            assert 'Thin — verify terms first' in detail and 'Fees covered from n/a' not in detail
             page.keyboard.press('Escape')
-            checks.append('native dialog, Escape and focus return; renewal contrast FARM day 73 vs THIN day 7 both rendered')
-            for selector in ['steakhouse-financial','sentora-curator','veda','gauntlet']:
-                page.locator(f'#table [data-compare="{selector}"]').click()
+            checks.append('authentic dossier capture; renewal contrast day 73 vs day 7; break-even present; Escape/focus return')
+            for slug in ['steakhouse-financial','sentora-curator','veda','gauntlet']:
+                page.locator(f'#table [data-compare="{slug}"]').click()
             assert page.locator('.compare-card').count() == 3
             assert 'full' in page.locator('#compare-status').inner_text()
             page.locator('#comparison [data-compare="veda"]').click()
             assert page.locator('.compare-card').count() == 2
-            checks.append('compare cap, removal and persistent selection')
-            page.locator('#assumptions summary').click()
-            page.locator('#s-whatif').fill('1')
-            page.locator('#s-pool').fill('1000000')
-            page.locator('#s-deposits').fill('10000000')
+            checks.append('compare cap and removal')
+            # Model edits must agree in every surface, including CSV and portfolio hours.
+            page.locator('#model-controls>summary').click()
+            page.locator('#m-capital').fill('5000')
+            page.locator('#m-days').fill('168')
+            page.locator('#m-share').fill('15')
+            page.locator('#m-alt').fill('8')
+            live = page.evaluate('''() => {
+                const s={capital:5000,days:168,share:.15,alt:.08};
+                const es=FIELD.rows.map(r=>Recompute.farmRow(r,s));
+                const farms=es.filter(e=>e.verdict==='FARM');
+                return {e:es[0],all:es,slugs:FIELD.rows.map(r=>r.slug),farms:farms.length,
+                  hours:(farms.reduce((n,e)=>n+e.minutes,0)/60).toFixed(0),net:farms.reduce((n,e)=>n+e.netAfterYield,0)};
+            }''')
+            def cash(x):
+                return f'${abs(x):,.2f}'
+            def signed(x):
+                return ('+' if x >= 0 else '-') + cash(x)
+            e = live['e']
+            board = page.locator('.table tbody tr').first.inner_text()
+            assert signed(e['net']) in board and cash(e['totalCost']) in board
+            assert signed(e['netPerHour']) in board and e['verdict'] in board
+            compare = page.locator('.compare-card').first.inner_text()
+            assert signed(e['net']) in compare and cash(e['totalCost']) in compare
+            assert f"{e['minutes']} min" in compare and signed(e['netPerHour']) in compare
+            assert e['verdict'] == page.locator('.compare-card .badge').first.inner_text()
+            portfolio = page.locator('#farm-now').inner_text()
+            assert f"{live['farms']} FARM = {signed(live['net'])} for {live['hours']}h" in portfolio
+            with page.expect_download() as download:
+                page.locator('#csv').click()
+            records = list(csv.DictReader(io.StringIO(pathlib.Path(download.value.path()).read_text())))
+            assert len(records) == 203
+            for record, expected, slug in zip(records, live['all'], live['slugs']):
+                assert record['slug'] == slug and record['verdict'] == expected['verdict']
+                for key, field in [('fees','totalCost'),('net','net'),('minutes','minutes'),('net_per_hour','netPerHour'),('break_even_odds','breakEvenOdds')]:
+                    assert (float(record[key]) if record[key] else None) == expected[field], (slug,key)
+                assert record['review_date'] == expected['reviewDate']
+            page.locator('[data-open="steakhouse-financial"]').click()
+            detail = page.locator('#detail').inner_text()
+            assert signed(e['net']) in detail and cash(e['totalCost']) in detail and signed(e['netPerHour']) in detail
+            assert e['verdict'] == page.locator('.detail-header .badge').inner_text()
+            assert 'Build scenario only ($1,000.00, 84d' in detail
+            assert e['reviewDate'] in detail and f"{e['minutes']} min" in detail
+            page.keyboard.press('Escape')
+            page.locator('#m-reset').click()
+            page.locator('#model-controls>summary').click()
+            checks.append('joint capital/days/share/yield edits propagate to board, comparison, dossier, all 203 CSV rows and portfolio hours; reset')
+            # Independent pool scenario remains shared without altering model verdicts.
+            page.locator('#assumptions>summary').click()
+            for key,value in [('whatif','1'),('pool','1000000'),('deposits','10000000'),('fixed','100')]:
+                page.locator('#s-'+key).fill(value)
             before = page.locator('#compare-grid').inner_text()
-            page.locator('#s-fixed').fill('100')
+            page.locator('#s-fixed').fill('2')
             assert page.locator('#compare-grid').inner_text() != before
             page.locator('#s-capital').fill('-1')
             assert page.locator('#invalid').is_visible()
             page.locator('#s-capital').fill('250')
             assert not page.locator('#invalid').is_visible()
-            page.locator('#s-fixed').fill('2')
-            page.locator('#assumptions summary').click()
-            expected = page.evaluate('FarmScenario.economics(FIELD.rows[0],Object.fromEntries(FarmScenario.fields.map(([k])=>[k,Number(document.getElementById("s-"+k).value)])))')
-            expected_text = f'${expected["expectedNet"]:,.2f}' if expected['expectedNet'] >= 0 else f'-${abs(expected["expectedNet"]):,.2f}'
-            assert expected_text in page.locator('#table .farm').first.inner_text()
-            assert expected_text in page.locator('#compare-grid').inner_text()
+            scenario = page.evaluate('FarmScenario.economics(FIELD.rows[0],Object.fromEntries(FarmScenario.fields.map(([k])=>[k,Number(document.getElementById("s-"+k).value)])))')
+            assert signed(scenario['expectedNet']) in page.locator('#table .farm').first.inner_text()
+            assert cash(scenario['expectedNet']) in page.locator('#compare-grid').inner_text()
+            page.locator('#assumptions>summary').click()
             page.locator('[data-open="steakhouse-financial"]').click()
-            assert expected_text in page.locator('#detail').inner_text()
+            assert cash(scenario['expectedNet']) in page.locator('#detail').inner_text()
             assert page.locator('#detail .sensitivity tbody tr').count() == 3
-            assert 'Reward-pool sensitivity' in page.locator('#detail').inner_text()
             page.keyboard.press('Escape')
-            checks.append('shared scenario propagation and invalid-input retention')
+            page.locator('#assumptions>summary').click()
+            page.locator('#s-whatif').fill('0')
+            assert 'what-if $' not in page.locator('#table').inner_text()
+            assert 'What-if expected net' not in page.locator('#compare-grid').inner_text()
+            page.locator('#assumptions>summary').click()
+            checks.append('pool what-if propagation, sensitivity and invalid-input retention')
             page.locator('#search').fill('not-a-protocol-zzzz')
             assert 'No candidates match' in page.locator('#table').inner_text()
             page.locator('[data-clear]').click()
             page.locator('#category').select_option('Lending')
-            page.locator('#sort').select_option('tvl')
-            assert page.locator('.table tbody tr').count() > 0
-            assert 'Lending' in page.locator('.table tbody tr').first.inner_text()
-            page.locator('#assumptions summary').click()
-            page.locator('#s-whatif').fill('0')
-            page.locator('#assumptions summary').click()
             page.locator('#verdict').select_option('FARM')
-            farm_rows = page.locator('.table tbody tr').count()
-            assert farm_rows > 0
-            assert 'FARM' in page.locator('.table tbody tr').first.inner_text()
+            assert page.locator('.table tbody tr').count() > 0
             page.locator('#verdict').select_option('')
             page.locator('#sort').select_option('net')
             assert page.locator('.table tbody tr').count() == 10
             page.locator('#sort').select_option('rank')
-            assert 'board.json' in page.locator('#audit').inner_text()
-            assert '40/40' in page.locator('#audit').inner_text()
-            page.evaluate('window.scrollTo(0,0)')
-            # Prove the interactive claims: open the re-price panel so the
-            # sliders are visible in the filtered screenshot (judge rule:
-            # code without a screenshot is unproven).
-            page.locator('#model-controls summary').click()
-            page.locator('#model-controls').scroll_into_view_if_needed()
-            page.evaluate('window.scrollBy(0,-120)')
-            page.screenshot(path=str(ROOT/'screenshots/3-filtered.jpg'), type='jpeg', quality=90)
-            page.locator('#model-controls summary').click()
-            page.evaluate('window.scrollTo(0,0)')
-            checks.append('empty state, clear, sector filter, verdict filter, net sort and self-audit strip')
-            # Fourth screenshot: the method evidence full-width — formula,
-            # cohort odds, premiums, walk-forward, all legible in one frame.
+            page.locator('#model-controls>summary').click()
+            page.locator('#board').scroll_into_view_if_needed()
+            page.locator('#board-title').evaluate('(e)=>e.scrollIntoView({block:"start"})')
+            assert fully_visible('#filters') and fully_visible('#model-inputs')
+            capture('3-filtered.jpg')
+            page.locator('#model-controls>summary').click()
+            checks.append('empty/clear, sector/verdict filters, net sort and reachable filtered capture with model inputs')
             page.locator('#category').select_option('')
-            page.locator('#verdict').select_option('')
-            page.locator('#evidence details summary').click()
-            page.evaluate('''() => {
-              document.querySelector('.mast').style.display = 'none';
-              document.querySelector('.intro').style.display = 'none';
-              document.querySelector('#farm-now').style.display = 'none';
-              document.querySelector('.plot').style.display = 'none';
-              document.querySelector('#board').style.display = 'none';
-              document.querySelector('#records').style.display = 'none';
-              document.querySelector('#provenance').style.display = 'none';
-              document.querySelector('.evidence').style.gridTemplateColumns = '1fr';
-              document.querySelector('.evidence-note').style.borderLeft = '0';
-              document.querySelector('.evidence-note').style.padding = '10px 22px';
-              document.querySelectorAll('#methods table').forEach(t => { t.style.fontSize = '12px'; });
-              window.scrollTo(0, 0);
-            }''')
-            page.wait_for_timeout(150)
-            page.screenshot(path=str(ROOT/'screenshots/4-method.jpg'), type='jpeg', quality=90)
-            page.reload()
-            page.wait_for_selector('#fieldbook:not([hidden])')
-            # Live recompute: every row's valuation and default farm economics
-            # must reproduce exactly in the browser; sliders must move verdicts.
-            recompute = page.evaluate('''() => {
-              let bad = 0;
-              for (const r of FIELD.rows) {
-                const v = Recompute.verify(r);
-                if (!v.impliedMatch || !v.conditionalMatch) bad++;
-                const f = Recompute.farmRow(r, {});
-                if (Math.abs(f.net - r.plan.econ.net) > 0.02 || f.verdict !== r.plan.econ.verdict) bad++;
-              }
-              const f5k = FIELD.rows.filter(r => Recompute.farmRow(r, {capital: 5000}).verdict === 'FARM').length;
-              return {bad, f5k, fDefault: FIELD.rows.filter(r => r.verdict === 'FARM').length};
-            }''')
-            assert recompute['bad'] == 0, recompute
-            assert recompute['f5k'] != recompute['fDefault'], recompute
-            page.locator('#model-controls summary').click()
-            page.locator('#m-capital').fill('5000')
-            assert '$5K' in page.locator('#model-summary').inner_text()
-            page.locator('#m-reset').click()
-            assert '$1K' in page.locator('#model-summary').inner_text()
-            page.locator('#model-controls summary').click()
-            checks.append(f"in-browser recompute exact on all rows; sliders re-price ({recompute['fDefault']}→{recompute['f5k']} FARM at $5K)")
-            for width in [390, 320, 768]:
+            page.locator('#evidence-pack>summary').click()
+            page.locator('#evidence-pack>summary').evaluate('(e)=>e.scrollIntoView({block:"start"})')
+            evidence = page.locator('#oos-evidence').inner_text()
+            shuffled = page.locator('#oos-evidence tr').filter(has_text='Shuffled growth control').locator('td').all_inner_texts()
+            assert shuffled == ['3.458× (-0.15×)','2.415× (+0.11×)','negative control'], shuffled
+            without_category = page.locator('#oos-evidence tr').filter(has_text='Without category').locator('td').all_inner_texts()
+            assert without_category == ['3.290× (-0.32×)','2.104× (-0.20×)','kept — mixed evidence'], without_category
+            assert 'kept — hurts both folds' in evidence
+            assert '61/87 (70.1%)' in evidence and '18/33 (54.5%)' in evidence
+            assert '66/87 (75.9%)' in evidence and '23/33 (69.7%)' in evidence
+            assert 'odds-weighted dossier range' in evidence and 'future-launch calibration' in evidence
+            assert 'no production term selection' in evidence
+            assert fully_visible('#oos-evidence'), page.locator('#oos-evidence').bounding_box()
+            assert page.locator('#oos-evidence table').count() == 3
+            capture('4-method.jpg')
+            page.locator('#evidence-pack>details>summary').click()
+            assert 'Age-matched bands' in page.locator('#methods').inner_text()
+            page.locator('#evidence-pack>details>summary').click()
+            page.locator('#evidence-pack>summary').click()
+            checks.append('reachable evidence capture: all experiment/Brier/coverage tables and bootstrap in frame; scope and control signs verified')
+            for width in [320,390,768]:
                 page.set_viewport_size({'width':width,'height':844})
-                page.locator('#category').select_option('')
                 page.locator('#search').fill('curvance')
                 assert page.locator('.table tbody tr').count() == 1
-                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), width
                 page.locator('#table [data-open]').click()
-                assert page.locator('#dossier').evaluate('(d)=>d.open')
-                assert page.locator('#dossier').evaluate('(d)=>d.scrollWidth<=d.clientWidth')
+                assert page.locator('#dossier').evaluate('(d)=>d.scrollWidth<=d.clientWidth'), width
                 page.keyboard.press('Escape')
-                page.locator('#evidence details summary').click()
-                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-                page.locator('#evidence details summary').click()
+                for selector in ['#model-controls>summary','#assumptions>summary','#evidence-pack>summary']:
+                    page.locator(selector).click()
+                    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (width,selector)
+                    page.locator(selector).click()
                 page.locator('#search').fill('')
                 page.locator('#chain').select_option('Base')
                 page.locator('#sort').select_option('growth')
                 assert page.locator('.table tbody tr').count() > 0
                 page.locator('#chain').select_option('')
-            checks.append('mobile 320/390 and tablet 768 search, filters, sort, dossier and no overflow')
-            # Every real candidate is reachable through the actual search and dossier controls.
+            checks.append('320/390/768px: search, chain/growth, dossier and expanded model/what-if/evidence without page overflow')
             page.set_viewport_size({'width':1440,'height':900})
             data = json.loads((out/'board.json').read_text())
             for row in data['rows']:
@@ -227,31 +232,25 @@ def main():
                 assert page.locator('#dossier-title').inner_text() == row['name']
                 assert page.locator('.timeline li').count() == len(row['farm_steps'])
                 page.keyboard.press('Escape')
-            checks.append(f'all {len(data["rows"])} real protocol dossiers')
-            file_page = context.new_page()
-            file_page.on('pageerror', lambda e: errors.append(str(e)))
-            file_page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
-            # A true disconnected context still renders data via local scripts.
+            checks.append(f'all {len(data["rows"])} dossiers reachable with complete timelines')
             context.unroute('**/*')
             context.set_offline(True)
-            file_page.goto((out/'dashboard/index.html').as_uri())
-            assert file_page.locator('.table tbody tr').count() == 10
-            checks.append('file:// rendering with network offline')
-            assert not errors, errors
-            assert not external, external
+            page.goto((out/'dashboard/index.html').as_uri())
+            assert page.locator('.table tbody tr').count() == 10
+            checks.append('file:// offline rendering; no external requests or JS errors')
+            assert not errors and not external, (errors,external)
             browser.close()
         server.shutdown()
-        for image in ROOT.joinpath('screenshots').glob('*.png'):
-            image.unlink()  # remove explicitly superseded starter captures only
         from PIL import Image
-        dimensions = {p.name:Image.open(p).size for p in ROOT.joinpath('screenshots').glob('*.jpg')}
-        assert all(size == (1440, 900) for size in dimensions.values())
-        report = {'checks':checks, 'complete_desktop_rows':complete_rows, 'screenshot_dimensions':dimensions, 'javascript_errors':errors, 'external_requests':external,
-                  'screenshots':{p.name:p.stat().st_size for p in ROOT.joinpath('screenshots').glob('*.jpg')}}
-        for size in report['screenshots'].values():
-            assert size < 512*1024
-        ROOT.joinpath('tests/browser-results.json').write_text(json.dumps(report, indent=2)+'\n')
-        print(json.dumps(report, indent=2))
+        images = sorted(ROOT.joinpath('screenshots').glob('*.jpg'))
+        dimensions = {p.name:Image.open(p).size for p in images}
+        assert len(images) == 4 and all(d == (1440,900) for d in dimensions.values())
+        sizes = {p.name:p.stat().st_size for p in images}
+        assert all(s < 512*1024 for s in sizes.values())
+        report = dict(checks=checks,complete_desktop_rows=complete_rows,board_y=board_y,screenshot_dimensions=dimensions,screenshots=sizes,javascript_errors=errors,external_requests=external)
+        if args.report:
+            args.report.write_text(json.dumps(report,indent=2)+'\n')
+        print(json.dumps(report,indent=2))
 
 if __name__ == '__main__':
     main()

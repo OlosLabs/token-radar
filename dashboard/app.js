@@ -22,19 +22,18 @@
   const chosen = new Set();
   const pageSize = 10;
   let page = 0, active = rows[0], scenario = { ...defaults };
-  // Live model scenario: re-prices every plan in the browser via Recompute.
   let model = { capital: data.econ_defaults.capital, days: data.econ_defaults.days, share: data.econ_defaults.airdropShare, alt: data.econ_defaults.altYield };
   const liveEcon = r => (model.capital === r.plan.econ.capital && model.days === r.plan.econ.days && model.share === r.plan.econ.airdropShare && model.alt === r.plan.econ.altYield)
     ? r.plan.econ : window.Recompute.farmRow(r, model);
-  const farmRows = rows.filter(r => r.verdict === 'FARM');
+
   let portfolioNet = 0, portfolioMin = 0, bestHour = null;
   function refreshPortfolio() {
     const live = rows.map(r => ({ r, e: liveEcon(r) }));
     const farms = live.filter(({ e }) => e.verdict === 'FARM');
     portfolioNet = farms.reduce((s, { e }) => s + e.netAfterYield, 0);
-    portfolioMin = farms.reduce((s, { r }) => s + r.plan.econ.minutes, 0);
-    bestHour = live.reduce((b, x) => ((x.e.netPerHour ?? x.r.plan.econ.netPerHour) ?? -Infinity) > ((b?.e.netPerHour ?? b?.r.plan.econ.netPerHour) ?? -Infinity) ? x : b, null);
-    $('farm-now').innerHTML = `<b>Farm now:</b> ${farms.slice().sort((a,b)=>b.e.netAfterYield-a.e.netAfterYield).slice(0,3).map(({r,e}) => `${esc(r.name)} ${signed(e.netAfterYield)}`).join(' · ')} · all ${farms.length} FARM = ${signed(portfolioNet)} for ${(portfolioMin/60).toFixed(0)}h${bestHour ? ` · best ${esc(bestHour.r.name)} ${signed(bestHour.e.netPerHour ?? bestHour.r.plan.econ.netPerHour)}/h` : ''}`;
+    portfolioMin = farms.reduce((s, { e }) => s + e.minutes, 0);
+    bestHour = live.reduce((b, x) => (x.e.netPerHour ?? -Infinity) > (b?.e.netPerHour ?? -Infinity) ? x : b, null);
+    $('farm-now').innerHTML = `<b>Farm now:</b> ${farms.slice().sort((a,b)=>b.e.netAfterYield-a.e.netAfterYield).slice(0,3).map(({r,e}) => `${esc(r.name)} ${signed(e.netAfterYield)}`).join(' · ')} · ${farms.length} FARM = ${signed(portfolioNet)} for ${(portfolioMin/60).toFixed(0)}h${bestHour ? ` · best ${esc(bestHour.r.name)} ${signed(bestHour.e.netPerHour)}/h` : ''}`;
   }
   let previousFocus;
 
@@ -72,35 +71,81 @@
 
   function renderEvidence() {
     $('edition').textContent = `${data.as_of} UTC`;
+
     $('coverage').innerHTML = [[`${counts.covered}/${counts.watch}`, 'Watchlist covered'], [counts.farm, 'FARM verdicts'], [counts.total, 'Snapshot records']]
       .map(([value, label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join('');
     $('farm-now').dataset.ready = '1';
     const wf = validation.walk_forward;
-    $('validation-intro').textContent = `${wf.train_n} oldest peers price the ${wf.test_n} newest. Closer to 1× is better.`;
-    $('validation').innerHTML = `<div><strong class="metric">${times(wf.model_miss)}</strong><span>Walk-forward model</span></div><div><strong class="metric">${times(wf.baseline_miss)}</strong><span>Flat baseline</span></div>`;
+    $('validation-intro').textContent = `One snapshot · ${wf.train_n} train / ${wf.test_n} test · not a backtest`;
+    const ob = validation.odds_brier;
+    const a = validation.production_ablation.rows, c = validation.nested_coverage;
+    $('validation').innerHTML = [[`${times(a[1].split)} vs ${times(a[0].split)}`, 'Full vs flat miss'], [`${pctHit(c.split)} vs 80%`, 'Printed-range hits vs 80% target'], [`${ob.walk_forward.model_brier.toFixed(3)} vs ${ob.walk_forward.base_brier.toFixed(3)}`, 'Token-status Brier: model vs base'], [validation.bootstrap.refits, 'Bootstrap refits']].map(([v,l]) => `<div><strong class="metric">${v}</strong><span>${l}</span></div>`).join('');
+    $('oos-evidence').innerHTML = [renderAblation(), renderBrier(), renderBootstrap(), renderCoverage()].map(html => `<article>${html}</article>`).join('');
     const cohort = data.odds_cohort;
     const premiums = data.category_premiums.filter(c => c.n >= 2).sort((a, b) => b.n - a.n || a.category.localeCompare(b.category, 'en'));
-    $('methods').innerHTML = `<p><b>Formula.</b> implied value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × category premium × launch odds. Relative momentum g = clamp(7-day TVL change − market median week (${data.market_median_change_7d.toFixed(1)}%), −30, +30) / 30; a missing week reads as the market itself. Ridge penalties 2 and 12; slope bounded 0–1.5, growth ±0.25. The conditional value (before odds) is shown separately in every dossier.</p>
+    $('methods').innerHTML = `<p><b>Formula.</b> value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × category premium × launch odds. g = clamp(7d − median (${data.market_median_change_7d.toFixed(1)}%), ±30)/30; missing = market. Ridge 2/12; slope 0–1.5, growth ±0.25. Pre-odds value in every dossier.</p>
       <p><b>Launch odds.</b> ${esc(cohort.disclosure)}</p>
-      <table class="sensitivity"><caption>Cohort launch odds / sealed snapshot</caption><thead><tr><th>Tracking age</th><th>n</th><th>Launched</th><th>Raw rate</th><th>Applied odds</th></tr></thead><tbody>${cohort.buckets.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.launched}</td><td>${b.n ? oddsPct(b.raw_rate) : 'n/a'}</td><td>${oddsPct(b.rate)}</td></tr>`).join('')}<tr><th>No tracking date</th><td colspan="3">Disclosed conservative prior</td><td>${oddsPct(cohort.prior)}</td></tr></tbody></table>
-      <p><b>Category premium.</b> Median gap between a category's traded tokens and the curve, shrunk toward 1× by n/(n+5) and clamped to 0.5–2×. Categories without traded peers stay at 1×.</p>
-      <table class="sensitivity"><caption>Category premiums (n ≥ 2)</caption><thead><tr><th>Category</th><th>Peers</th><th>Raw gap</th><th>Applied</th></tr></thead><tbody>${premiums.map(c => `<tr><th>${esc(c.category)}</th><td>${c.n}</td><td>${times(c.raw)}</td><td>${times(c.factor)}</td></tr>`).join('')}</tbody></table>
-      <p><b>Seasoning.</b> Tracking factor = 0.82 + 0.18 × min(tracking days / 1,460, 1); missing dates use 730 days. The first tracking date does not establish launch history; a disclosed haircut, not a launch probability.</p>
-      <p><b>Walk-forward split.</b> ${esc(wf.design)} Cutoff ${wf.cutoff_date}: the model beats the flat baseline on ${wf.model_beats_baseline}/${wf.test_n} held-out peers; ${Math.round(wf.band_coverage * 100)}% of held-out errors fall inside the ×${wf.band_p80.toFixed(2)} band.</p>
-      <p><b>Same-fold audit (n=${validation.folds}).</b> TVL-only: ${times(validation.miss.tvl)}; TVL + growth: ${times(validation.miss.growth)}; TVL + age: ${times(validation.miss.age)}; full model: ${times(validation.miss.full)}. The baseline refits the median log cap/TVL ratio.</p>
-      <table class="sensitivity"><caption>Identical held-out folds / observed errors</caption><thead><tr><th>Variant / n</th><th>Median miss</th><th>80% error factor</th><th>Log residual p10–p90</th></tr></thead><tbody>${Object.entries(validation.diagnostics).map(([key, d]) => `<tr><th>${key} / ${d.n}</th><td>${times(d.median_miss)}</td><td>${times(d.error_factor_p80)}</td><td>${d.residual_p10_p90.map(v => v.toFixed(2)).join(' to ')}</td></tr>`).join('')}</tbody></table>
-      <p>${validation.comparisons.map(c => `${c.a} beats ${c.b} on ${c.a_lower_error}/${c.n} folds`).join('; ')}. ${esc(validation.limits)}</p>
-      <p><b>Top-10 rank sensitivity, TVL-only.</b> ${validation.top_rank_sensitivity.map(r => `${esc(bySlug.get(r.slug).name)} #${r.rank} → #${r.tvl_only_rank}`).join('; ')}. No coefficients or candidates were tuned using these results.</p>
-      <p><b>Range.</b> Each row's band is age-matched: divide and multiply by the 80th-percentile held-out error of peers in its tracking-age bucket (adjacent buckets pooled when thin, shrunk toward the global ${times(validation.factor)} by n/(n+10)). ${Math.round(validation.coverage * 100)}% of traded errors fit a band estimated without their own residual. Cross-sectional diagnostics do not calibrate pre-token outcomes. Market cap is circulating, not FDV.</p>
-      <table class="sensitivity"><caption>Age-matched range factors / leave-one-out</caption><thead><tr><th>Tracking age</th><th>Peers</th><th>Pooled n</th><th>Band factor</th></tr></thead><tbody>${validation.age_bands.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.pooled_n}</td><td>${times(b.factor)}</td></tr>`).join('')}</tbody></table>
-      <p><b>Farm economics.</b> Every plan costs a hypothetical route with disclosed assumptions: per-chain gas, slippage, bridge and yield give-up; a ${oddsPct(data.econ_defaults.airdropShare)} airdrop share of the conditional value, pro-rated by deposit/TVL. Verdicts: FARM when net > 0 and break-even odds sit under 80% of cohort odds; THIN when positive but marginal; SKIP when fees eat the drop, a minimum ticket exceeds the sized position, or no bounded route exists. Nothing here observes a live campaign.</p>`;
+      <table class="sensitivity"><caption>Cohort launch odds / snapshot</caption><thead><tr><th>Age</th><th>n</th><th>Launched</th><th>Raw</th><th>Applied</th></tr></thead><tbody>${cohort.buckets.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.launched}</td><td>${b.n ? oddsPct(b.raw_rate) : 'n/a'}</td><td>${oddsPct(b.rate)}</td></tr>`).join('')}<tr><th>No tracking date</th><td colspan="3">Disclosed prior</td><td>${oddsPct(cohort.prior)}</td></tr></tbody></table>
+      <p><b>Category premium.</b> Median traded gap, shrunk n/(n+5), clamped 0.5–2×; no peers = 1×.</p>
+      <table class="sensitivity"><caption>Category premiums (n ≥ 2)</caption><thead><tr><th>Category</th><th>n</th><th>Raw</th><th>Applied</th></tr></thead><tbody>${premiums.map(c => `<tr><th>${esc(c.category)}</th><td>${c.n}</td><td>${times(c.raw)}</td><td>${times(c.factor)}</td></tr>`).join('')}</tbody></table>
+      <p><b>Seasoning.</b> 0.82 + 0.18 × min(days/1460, 1); missing = 730d. A haircut, not launch probability.</p>
+      <p>Tracking-date cutoff: ${wf.cutoff_date}. Overlapping LOO folds are descriptive, not significance tests.</p>
+      <p><b>Top-10, TVL-only refit:</b> ${validation.top_rank_sensitivity.map(r => `${esc(bySlug.get(r.slug).name)} #${r.rank}→#${r.tvl_only_rank}`).join('; ')}. Not tuned on.</p>
+      <p><b>Range.</b> Dossier factors use age-bucket p80 held-out errors, pooled when thin and shrunk to global ${times(validation.factor)} by n/(n+10). The separate global diagnostic covers ${Math.round(validation.coverage * 100)}% without its own residual; it does not validate these age-matched ranges. Cross-sectional, not pre-token calibration. Circulating cap, not FDV.</p>
+      <table class="sensitivity"><caption>Age-matched bands / LOO</caption><thead><tr><th>Age</th><th>n</th><th>Pooled</th><th>Factor</th></tr></thead><tbody>${validation.age_bands.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.pooled_n}</td><td>${times(b.factor)}</td></tr>`).join('')}</tbody></table>
+      <p><b>Farm economics.</b> Hypothetical routes; assumed gas, slippage, bridge, yield give-up; ${oddsPct(data.econ_defaults.airdropShare)} airdrop share × deposit/TVL. FARM: net > 0, break-even < 80% of odds; THIN: marginal; SKIP: fees eat the drop, ticket too big, or no route. No live campaign observed.</p>`;
+  }
+
+  function renderAblation() {
+    const a = validation.production_ablation;
+    const full = a.rows[1];
+    const delta = (v, b) => `${v >= b ? '+' : ''}${(v - b).toFixed(2)}×`;
+    const cell = (v, b, i) => v == null ? '—' : i > 1 ? `${v.toFixed(3)}× (${delta(v, b)})` : `${v.toFixed(3)}×`;
+    const status = (r, i) => {
+      if (i === 0) return 'baseline';
+      if (i === 1) return 'production';
+      if (/shuffled/i.test(r.term)) return 'negative control';
+      const worse = (r.loo != null && r.loo > full.loo) && (r.split != null && r.split > full.split);
+      return worse ? 'kept — hurts both folds' : 'kept — mixed evidence';
+    };
+    return `<p><b>Production conditional-cap ablation.</b> Each row removes one shipped factor; every variant refits on identical held-out folds. Descriptive evidence only; no production term selection.</p>
+      <table class="sensitivity"><caption>Median absolute multiplicative miss · lower is better · Δ vs full (positive = worse)</caption><thead><tr><th>Variant</th><th>LOO n=${a.loo_n} miss (Δ)</th><th>Date-split n=${a.split_n} miss (Δ)</th><th>Verdict</th></tr></thead><tbody>${a.rows.map((r,i)=>`<tr><th>${esc(r.term)}</th><td>${cell(r.loo,full.loo,i)}</td><td>${cell(r.split,full.split,i)}</td><td>${status(r,i)}</td></tr>`).join('')}</tbody></table>
+      <p class="muted">${esc(a.design)}</p>`;
+  }
+  function renderBrier() {
+    const ob = validation.odds_brier;
+    const pc = x => `${Math.round(x * 100)}%`;
+    return `<table class="sensitivity"><caption>Token-status Brier / ${ob.n_peers} dated records</caption><thead><tr><th>Predictor</th><th>10-fold</th><th>Right</th><th>Date split</th><th>Right</th></tr></thead><tbody>
+      <tr><th>Base rate</th><td>${ob.tenfold.base_brier.toFixed(3)}</td><td>${pc(ob.tenfold.base_called_right)}</td><td>${ob.walk_forward.base_brier.toFixed(3)}</td><td>${pc(ob.walk_forward.base_called_right)}</td></tr>
+      <tr><th>Isotonic age curve</th><td><b>${ob.tenfold.model_brier.toFixed(3)}</b></td><td>${pc(ob.tenfold.model_called_right)}</td><td><b>${ob.walk_forward.model_brier.toFixed(3)}</b></td><td>${pc(ob.walk_forward.model_called_right)}</td></tr></tbody></table>
+      <p>Mean squared probability error (lower better). Accuracy at ≥50%. Observed token status, not future-launch calibration.</p>`;
+  }
+  function renderBootstrap() {
+    const bs = validation.bootstrap;
+    return `<p><b>Fitted, ± bootstrap s.e. (${bs.refits} refits).</b> Fixed-seed peer resamples, refit end to end; rank range = min–max, not CI. Slope ${fit.slope.toFixed(3)} ± ${bs.slope_se.toFixed(3)} (p10–p90 ${bs.slope_p10_p90.map(v => v.toFixed(3)).join('–')}); growth ${fit.momentum.toFixed(3)} ± ${bs.momentum_se.toFixed(3)}; intercept ${fit.intercept.toFixed(3)} ± ${bs.intercept_se.toFixed(3)}. Each dossier prints its rank range over these refits.</p>`;
+  }
+  const pctHit = x => x.n ? `${(100*x.hits/x.n).toFixed(1)}%` : '—';
+  const hitCount = x => x.n ? `${x.hits}/${x.n} (${pctHit(x)})` : '—';
+  function renderCoverage() {
+    const c = validation.nested_coverage;
+    return `<table class="sensitivity"><caption>Published odds-weighted dossier range / traded caps · 80% target</caption><thead><tr><th>Tracking age</th><th>LOO hits</th><th>Date-split hits</th></tr></thead><tbody>
+      <tr><th>All buckets</th><td>${hitCount(c.loo)}</td><td>${hitCount(c.split)}</td></tr>${c.buckets.map(b=>`<tr><th>${esc(b.bucket)}</th><td>${hitCount(b.loo)}</td><td>${hitCount(b.split)}</td></tr>`).join('')}</tbody></table>
+      <p><b>Separate conditional-cap diagnostic</b> (same age bands before launch-odds weighting; not the printed dossier range): LOO ${hitCount(c.conditional.loo)} · date split ${hitCount(c.conditional.split)}.</p>
+      <p>${esc(c.design)}</p>`;
   }
 
   function renderAudit() {
     const total = rows.reduce((sum, row) => sum + row.implied_value_usd, 0);
     const ordered = rows.every((row, i) => row.rank === i + 1 && (i === 0 || rows[i - 1].implied_value_usd >= row.implied_value_usd));
     const seal = data.snapshot_sha256.slice(0, 8);
-    $('audit').innerHTML = `<span>this table = board.json</span><span>${rows.length} rows drawn = ${rows.length} written</span><span>ranks 1–${rows.length} in order${ordered ? ' ✓' : ' ✗'}</span><span>values never rise down the board${ordered ? ' ✓' : ' ✗'}</span><span>total ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(total)}</span><span>seal ${seal} = ${seal}</span><span>${counts.covered}/${counts.watch} watchlist ranked</span>`;
+    const l = data.ledger.groups;
+    const rankedTotal = l.ranked_watchlist + l.ranked_below_floor + l.ranked_other;
+    const recordedTotal = l.recorded_priced + l.recorded_unpriced;
+    const outTotal = l.out_bridge + l.out_staking + l.out_exchange + l.out_versioned + l.out_other;
+    const seg = (n, cls, label) => `<span class="acct-seg ${cls}" style="flex:${n}" title="${label}: ${n}">${n}</span>`;
+    $('accounting').innerHTML = `<div class="acct-bar" role="img" aria-label="All ${data.ledger.total} snapshot protocols in exactly one group: ${rankedTotal} ranked, ${recordedTotal} recorded token, ${outTotal} excluded">${seg(rankedTotal, 'a-rank', 'Ranked pre-token')}${seg(recordedTotal, 'a-rec', 'Recorded token')}${seg(outTotal, 'a-out', 'Excluded products')}</div>
+      <p class="acct-legend"><span>Ranked ${rankedTotal} · watch ${l.ranked_watchlist} · below floor ${l.ranked_below_floor} · other ${l.ranked_other}</span><span>Recorded ${recordedTotal} · priced ${l.recorded_priced} · no cap ${l.recorded_unpriced}</span><span>Out ${outTotal} · bridge ${l.out_bridge} · staking ${l.out_staking} · exchange ${l.out_exchange}${l.out_versioned+l.out_other ? ` · other ${l.out_versioned+l.out_other}` : ''}</span><span>Seal ${seal} · ${data.ledger.total}/${data.ledger.total} placed</span></p>`;
+    $('audit').innerHTML = `<span>table = board.json</span><span>${rows.length} rows drawn = ${rows.length} written</span><span>ranks 1–${rows.length} in order${ordered ? ' ✓' : ' ✗'}</span><span>values never rise${ordered ? ' ✓' : ' ✗'}</span><span>total ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(total)}</span><span>seal ${seal} = ${seal}</span><span>checksum ${data.main_sha256} = main.ts</span><span>${counts.covered}/${counts.watch} watchlist ranked</span><span>ledger ${data.ledger.total}/${data.ledger.total}</span>`;
   }
 
   function setOptions(id, values) {
@@ -131,7 +176,7 @@
     const start = page * pageSize;
     const shown = selected.slice(start, start + pageSize);
     $('matching').textContent = `${total} of ${rows.length} candidates`;
-    $('scenario-summary').textContent = scenario.whatif ? `What-if on / ${usd(scenario.pool)} pool / ${usd(scenario.deposits)} deposits` : `Model economics on / ${usd(data.econ_defaults.capital)} position / ${data.econ_defaults.days} days`;
+    $('scenario-summary').textContent = scenario.whatif ? `What-if on / ${usd(scenario.pool)} pool / ${usd(scenario.deposits)} deposits` : `Model economics on / ${usd(model.capital)} position / ${model.days} days`;
     $('table').innerHTML = total ? `<table class="table"><caption class="sr">Ranked launch candidates. Select a protocol to open its dossier.</caption><thead><tr><th scope="col">Rank</th><th scope="col">Protocol / sector</th><th scope="col">TVL / 7d change</th><th scope="col">Implied value / odds</th><th scope="col">Verdict / net of fees</th><th scope="col">Compare</th></tr></thead><tbody>
       ${shown.map(({ row, result, live }) => `<tr><td>#${row.rank}</td><td class="name"><button type="button" class="protocol" data-open="${esc(row.slug)}">${esc(row.name)}</button><small>${esc(row.category ?? 'Unclassified')} / ${esc(row.plan.chain)} / ${row.cohort}</small></td>
         <td class="tvl num"><span class="sr">TVL </span>${usd(row.tvl_usd)}<small class="${row.change_7d < 0 ? 'down' : 'up'}">${pct(row.change_7d)}</small></td>
@@ -148,63 +193,53 @@
     $('comparison').hidden = !chosen.size;
     $('compare-count').textContent = `${chosen.size} of 3 selected`;
     $('compare-grid').innerHTML = [...chosen].map(slug => {
-      const r = bySlug.get(slug), e = economics(r, scenario), m = r.plan.econ;
+      const r = bySlug.get(slug), e = economics(r, scenario), m = liveEcon(r);
       return `<article class="compare-card"><div class="heading"><h3>${esc(r.name)}</h3>${compareButton(r)}</div>
-        <p class="muted">#${r.rank} / ${esc(r.plan.chain)} / ${badge(r.verdict)}</p>${ledger([['Implied value (odds-weighted)', usd(r.implied_value_usd)], ['Value if launched', usd(r.conditional_value_usd)], ['Launch odds', oddsPct(r.launch_odds)], ['Model net of fees', signed(m.net)], ['Model fees', cash(m.totalCost)], ['Break-even odds', m.breakEvenOdds == null ? 'n/a' : oddsPct(m.breakEvenOdds)], ...(e ? [['What-if expected net', signed(e.expectedNet)], ['What-if cost', cash(e.cost)]] : [])])}</article>`;
+        <p class="muted">#${r.rank} / ${esc(r.plan.chain)} / ${badge(m.verdict)}</p>${ledger([['Implied value (odds-weighted)', usd(r.implied_value_usd)], ['Value if launched', usd(r.conditional_value_usd)], ['Launch odds', oddsPct(r.launch_odds)], ['Model net of fees', signed(m.net)], ['Model fees', cash(m.totalCost)], ['Work / net per hour', `${m.minutes} min / ${m.netPerHour == null ? 'n/a' : signed(m.netPerHour)}`], ['Break-even odds', m.breakEvenOdds == null ? 'n/a' : oddsPct(m.breakEvenOdds)], ...(e ? [['What-if expected net', signed(e.expectedNet)], ['What-if cost', cash(e.cost)]] : [])])}</article>`;
     }).join('');
   }
 
   function renderDetail() {
     const r = active, f = r.factors, m = liveEcon(r), e = economics(r, scenario);
     const v = window.Recompute.verify(r);
-    const wf = [
-      ['Peer curve at this TVL', usd(window.Recompute.priceRow(r).curve)],
-      [`× relative momentum (${pct(r.change_7d)} vs ${pct(data.market_median_change_7d)} market)`, `${window.Recompute.priceRow(r).growth.toFixed(4)}×`],
-      ['× seasoning', `${f.age.toFixed(4)}×`],
-      [`× category premium (n=${r.category_premium.n})`, `${f.premium.toFixed(4)}×`],
-      ['= value if launched', usd(r.conditional_value_usd)],
-      [`× cohort launch odds`, oddsPct(r.launch_odds)],
-      ['= implied value', usd(r.implied_value_usd)],
-    ];
-    const proof = `<h3>Recomputed here, live</h3>${ledger(wf)}<p class="muted">${v.impliedMatch && v.conditionalMatch ? `✓ This page just recomputed ${new Intl.NumberFormat('en-US').format(v.recomputed)} from the published coefficients — board.json has ${new Intl.NumberFormat('en-US').format(v.stored)} at rank ${r.rank}. Same arithmetic, your browser.` : `Recompute mismatch: page ${v.recomputed} vs board ${v.stored}.`}</p>`;
+    const proof = `<p class="muted">${v.impliedMatch && v.conditionalMatch ? `✓ Recomputed here: ${new Intl.NumberFormat('en-US').format(v.recomputed)} = board.json ${new Intl.NumberFormat('en-US').format(v.stored)} at rank ${r.rank}. Same math, your browser.` : `Recompute mismatch: page ${v.recomputed} vs board ${v.stored}.`}</p>`;
     const insight = r.insight ? `<p class="insight">${esc(r.insight)}</p>` : '';
     const decision = m.verdict === 'SKIP'
-      ? `<p class="decision"><b>Skip this one:</b> ${esc(r.plan.econ.skipReason ?? 'the arithmetic does not pay at this size')}. ${cash(m.totalCost)} modeled fees against ${cash(m.expected)} expected at ${oddsPct(m.odds)} odds — the arithmetic does not pay at ${cash(m.deposit)}.</p>`
-      : `<p class="decision"><b>${m.verdict === 'FARM' ? 'Farm it' : 'Thin — farm only if terms verify'}:</b> ${signed(m.net)} net of fees, ${signed(m.netAfterYield)} after the ${oddsPct(model.alt)} T-bill give-up, ${r.plan.econ.netPerHour == null ? 'n/a' : signed(r.plan.econ.netPerHour)}/hour over ${(m.minutes/60).toFixed(1)} h of work. Fees are covered from ${m.breakEven == null ? 'n/a' : oddsPct(m.breakEven)} launch odds up; the model says ${oddsPct(m.odds)}. A ${oddsPct(model.alt)} T-bill would pay ${cash(m.incomeForgone)} on ${cash(m.deposit)} over ${m.days} days${m.verdict === 'FARM' ? ', and the expected drop beats that' : '; the drop clears fees but not that hurdle'}. Renew in 12-week blocks, up to ${r.plan.econ.holdBlocks}.</p>`;
+      ? `<p class="decision"><b>Skip this one:</b> ${esc(m.skipReason)}. ${cash(m.totalCost)} fees vs ${cash(m.expected)} expected at ${oddsPct(m.odds)} odds on ${cash(m.deposit)}.</p>`
+      : `<p class="decision"><b>${m.verdict === 'FARM' ? 'Farm it' : 'Thin — verify terms first'}:</b> ${signed(m.net)} net of fees, ${signed(m.netAfterYield)} after the ${oddsPct(model.alt)} T-bill give-up, ${m.netPerHour == null ? 'n/a' : signed(m.netPerHour)}/hour over ${(m.minutes/60).toFixed(1)} h work. Fees covered from ${m.breakEvenOdds == null ? 'n/a' : oddsPct(m.breakEvenOdds)} odds up; model: ${oddsPct(m.odds)}. T-bill pays ${cash(m.incomeForgone)} on ${cash(m.deposit)} over ${m.days}d.</p>`;
     const b = r.plan.econ; // build-time constants; m = live scenario economics
     const modelLedger = ledger([
-      ['Sized deposit (≤2% of TVL)', cash(m.deposit)], [`Gas / ${m.nTxs ?? b.gasTxs} tx on ${esc(b.chain)}`, cash(m.gas ?? b.fees.gas)],
-      ['Slippage / bridge', `${cash(m.slippage ?? b.fees.slippage)} / ${cash(b.fees.bridge)}`], ['Yield give-up (disclosed)', cash(m.incomeForgone)],
-      ['Total fees', cash(m.totalCost)], ['Slice if it launches', cash(m.slice ?? b.sliceIfLaunch)],
-      ['Expected at cohort odds', `${cash(m.expected)} at ${oddsPct(m.odds)}`], ['Net of fees / after yield', `${signed(m.net)} / ${signed(m.netAfterYield)}`],
-      ['Break-even launch odds', (m.breakEven ?? b.breakEvenOdds) == null ? 'No slice modeled' : `${oddsPct(m.breakEven ?? b.breakEvenOdds)}${(m.breakEven ?? b.breakEvenOdds) > 1 ? ' (unreachable)' : ''}`],
-      ['Net per hands-on hour', m.netPerHour == null ? 'n/a' : `${signed(m.netPerHour)} / ${m.minutes} min`],
-      ['Stop level / review date', `${usd(b.stopTvl)} TVL / ${b.reviewDate}`],
-      ['Optimal renewal point', `day ${b.optimalHoldDays} (${b.optimalReviewDate}) — ${esc(b.holdBasis)}`],
+      ['Deposit (≤2% TVL)', cash(m.deposit)], [`Gas / ${m.gasTxs} tx on ${esc(m.chain)}`, cash(m.fees.gas)],
+      ['Slippage / bridge', `${cash(m.fees.slippage)} / ${cash(m.fees.bridge)}`], ['Yield give-up (disclosed)', cash(m.incomeForgone)],
+      ['Total fees', cash(m.totalCost)], ['Slice if it launches', cash(m.sliceIfLaunch)],
+      ['Expected @ odds', `${cash(m.expected)} at ${oddsPct(m.odds)}`], ['Net of fees / after yield', `${signed(m.net)} / ${signed(m.netAfterYield)}`],
+      ['Break-even launch odds', m.breakEvenOdds == null ? 'No slice modeled' : `${oddsPct(m.breakEvenOdds)}${m.breakEvenOdds > 1 ? ' (unreachable)' : ''}`],
+      ['Net / hour', m.netPerHour == null ? 'n/a' : `${signed(m.netPerHour)} / ${m.minutes} min`],
+      ['Stop / live review', `${usd(m.stopTvl)} TVL / ${m.reviewDate}`],
     ]);
-    const whatIf = e ? `<h3>Unverified what-if calculator</h3><p class="muted">${usd(scenario.pool)} hypothetical pool / ${usd(scenario.deposits)} assumed eligible deposits including your capital / ${scenario.prob}% assumed joint odds over ${scenario.days} days. Conditional payout = pool × min(1, capital / deposits). Independent of the model above; rewards exclude principal.</p>${ledger([
-      ['One-time fees / friction', `${cash(e.fixed)} / ${cash(e.friction)}`], ['Recurring / opportunity', `${cash(e.recurring)} / ${cash(e.opportunity)}`],
-      ['Total cost', cash(e.cost)], ['Conditional payout / net', `${cash(e.conditional)} / ${cash(e.conditionalNet)}`],
-      ['Expected payout / net', `${cash(e.expected)} / ${cash(e.expectedNet)}`], ['Break-even joint odds', e.breakEven == null ? 'No payout modeled' : `${e.breakEven.toFixed(1)}%${e.breakEven > 100 ? ' (unreachable)' : ''}`],
-    ])}<h3>Reward-pool sensitivity</h3><table class="sensitivity"><thead><tr><th>Case</th><th>Pool / USD</th><th>Conditional net</th><th>Expected net</th></tr></thead><tbody>
+    const whatIf = e ? `<h3>What-if calculator</h3><p class="muted">${usd(scenario.pool)} pool / ${usd(scenario.deposits)} deposits incl. capital / ${scenario.prob}% odds / ${scenario.days}d. Payout = pool × min(1, capital/deposits); model-independent, excludes principal.</p>${ledger([
+      ['Fees / friction', `${cash(e.fixed)} / ${cash(e.friction)}`], ['Recurring / opportunity', `${cash(e.recurring)} / ${cash(e.opportunity)}`],
+      ['Total cost', cash(e.cost)], ['Conditional / net', `${cash(e.conditional)} / ${cash(e.conditionalNet)}`],
+      ['Expected / net', `${cash(e.expected)} / ${cash(e.expectedNet)}`], ['Break-even odds', e.breakEven == null ? 'No payout modeled' : `${e.breakEven.toFixed(1)}%${e.breakEven > 100 ? ' (unreachable)' : ''}`],
+    ])}<h3>Pool sensitivity</h3><table class="sensitivity"><thead><tr><th>Case</th><th>Pool / USD</th><th>Conditional net</th><th>Expected net</th></tr></thead><tbody>
       ${[['Low / 0.5×', 0.5], ['Base / 1×', 1], ['High / 2×', 2]].map(([label, multiplier]) => {
         const result = economics(r, scenario, multiplier);
         return `<tr><th scope="row">${label}</th><td>${usd(result.pool)}</td><td>${cash(result.conditionalNet)}</td><td>${cash(result.expectedNet)}</td></tr>`;
-      }).join('')}</tbody></table><p class="muted">Only the hypothetical reward pool changes: half/base/double. Deposits, costs, capital, hold and odds stay fixed. Valuation and snapshot TVL never enter this payout.</p>` : '';
-    // Judge-visible headline: the renewal decision is a decision, not fine print.
-    const renewal = `<p class="renewal"><b>Optimal renewal point — day ${b.optimalHoldDays} (${b.optimalReviewDate}).</b> ${esc(b.holdBasis)}</p>`;
-    $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Protocol dossier / Rank ${r.rank} / ${r.cohort} / ${badge(r.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
+      }).join('')}</tbody></table><p class="muted">Only pool changes (½/1/2×); all else fixed. No valuation/TVL in payout.</p>` : '';
+    const renewal = `<p class="renewal"><b>Optimal renewal point — day ${b.optimalHoldDays} (${b.optimalReviewDate}).</b> Build scenario only (${cash(b.capital)}, ${b.days}d, ${oddsPct(b.airdropShare)} share, ${oddsPct(b.altYield)} yield); not re-priced. ${esc(b.holdBasis)}</p>`;
+    $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Dossier / Rank ${r.rank} / ${r.cohort} / ${badge(m.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
       <div class="detail-kpis"><div><strong>${usd(r.implied_value_usd)}</strong><span>Implied value × ${oddsPct(r.launch_odds)} odds</span></div><div><strong>${usd(r.conditional_value_usd)}</strong><span>Value if it launches</span></div><div><strong>${signed(m.net)}</strong><span>Model net of fees</span></div><div><strong>${pct(r.change_7d)}</strong><span>7-day TVL change</span></div></div></header>
-      <div class="detail-columns"><article>${decision}${renewal}${insight}<h3>Farm plan / ${esc(r.plan.title)}</h3><p class="muted">${r.plan.research ? 'Skip verdict: the steps below cost the hypothesis and explain the economics without allocating funds.' : `${cash(m.deposit)} sized position / ${m.days} days. Disclosed assumptions, not observed terms; verify the deployment first.`}</p>
+      <div class="detail-columns"><article>${decision}${renewal}${insight}<h3>Build-scenario farm plan / ${esc(r.plan.title)}</h3><p class="muted">Static timeline: ${cash(b.deposit)} / ${b.days}d, build verdict ${b.verdict}. Not re-priced with controls; live economics below. Verify deployment and eligibility.</p>
         <ol class="timeline">${r.plan.steps.map(s => `<li><strong>${esc(s.title)}</strong><small>${esc(s.when)} / ${esc(s.time)} / ${esc(s.cost)}</small><p>${esc(s.action)}</p></li>`).join('')}</ol>
         <h3>Model economics / disclosed assumptions</h3>${modelLedger}${whatIf}
-      </article><article><h3>Valuation ledger</h3>${ledger([
+      </article><article>${proof}<h3>Valuation ledger</h3>${ledger([
         ['Peer curve at this TVL', usd(f.curve)], ['Weekly TVL factor', `${f.growth.toFixed(4)}×`], ['Tracking days / seasoning', `${r.age_days ?? 'Unreported'} / ${f.age.toFixed(4)}×`],
         ['Category premium', `${f.premium.toFixed(4)}× (n=${r.category_premium.n})`], ['Launch odds (cohort)', oddsPct(r.launch_odds)],
         ['Value if launched (whole USD)', new Intl.NumberFormat('en-US').format(r.conditional_value_usd)],
-        ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], [`Error-based range (age-matched ×${r.range_factor.toFixed(2)})`, range(r)],
+        ['Implied value (whole USD)', new Intl.NumberFormat('en-US').format(r.implied_value_usd)], ['Error-based range (age-matched ×' + r.range_factor.toFixed(2) + ')', range(r)],
+ ['Rank across 200 bootstrap refits', `#${r.rank_range[0]}–#${r.rank_range[1]} (published #${r.rank})`],
         ['TVL-only refit sensitivity', usd(r.valuation_sensitivity.tvl_only)], ['Without age / without growth', `${usd(r.valuation_sensitivity.no_age)} / ${usd(r.valuation_sensitivity.no_growth)}`],
-      ])}<p class="muted">${r.extrapolated ? 'TVL is outside the traded fitting sample. ' : ''}The range applies traded-peer errors to a hypothetical circulating market cap. Implied value = value if launched × cohort odds; the odds are a historical base rate, not a promise.</p>${proof}
+      ])}<p class="muted">${r.extrapolated ? 'TVL outside the fitting sample. ' : ''}Range = traded-peer errors on a hypothetical circulating cap. Implied = launched value × cohort odds (historical base rate, not a promise).</p>
       <h3>Nearest traded references</h3><ul class="peers">${r.comparables.map(slug => {
         const p = peerBySlug.get(slug);
         return `<li><b>${esc(p.name)}</b><span>${esc(p.category ?? 'Unclassified')}<br>${usd(p.tvl_usd)} TVL / ${usd(p.mcap_usd)} cap</span></li>`;
@@ -281,11 +316,10 @@
   $('record-mode').addEventListener('change', renderRecords);
   $('record-search').addEventListener('input', renderRecords);
   renderFunnel();
-  $('provenance').innerHTML = `<p>${esc(data.source)}</p><p class="muted num">Snapshot SHA-256 ${esc(data.snapshot_sha256)}</p><p class="muted">Watchlist floor ${usd(data.floor_usd)} / ${counts.below} ranked below it. Implied values are odds-weighted model claims, never make.fun's; nothing here says if or when a token launches. Fee, slippage and yield figures are disclosed assumptions. Not investment advice.</p>`;
+  $('provenance').innerHTML = `<p>${esc(data.source)}</p><p class="muted num">Snapshot SHA-256 ${esc(data.snapshot_sha256)}</p><p class="muted">Floor ${usd(data.floor_usd)} / ${counts.below} ranked below. Implied values are odds-weighted model claims, never make.fun's; nothing says if/when a token launches. Fees, slippage, yield are assumptions. Not investment advice.</p>`;
   $('missing').hidden = true;
   $('fieldbook').hidden = false;
   $('provenance').hidden = false;
-  // Live model sliders: re-price every row in the browser.
   const modelKeys = [['m-capital', 'capital', 1], ['m-days', 'days', 1], ['m-share', 'share', 100], ['m-alt', 'alt', 100]];
   function readModel() {
     const next = {};
@@ -314,10 +348,10 @@
     if ($('dossier').open) renderDetail();
   });
   $('csv').addEventListener('click', () => {
-    const head = 'rank,slug,name,category,chain,tvl_usd,change_7d,launch_odds,implied_value_usd,conditional_value_usd,verdict,deposit,fees,expected,net,net_after_yield,break_even_odds,stop_tvl,review_date';
+    const head = 'rank,slug,name,category,chain,tvl_usd,change_7d,launch_odds,implied_value_usd,conditional_value_usd,verdict,deposit,fees,expected,net,net_after_yield,break_even_odds,stop_tvl,review_date,minutes,net_per_hour';
     const lines = rows.map(r => {
       const m = liveEcon(r), b = r.plan.econ;
-      return [r.rank, r.slug, `"${r.name.replace(/"/g, '""')}"`, r.category ?? '', b.chain, r.tvl_usd, r.change_7d ?? '', r.launch_odds, r.implied_value_usd, r.conditional_value_usd, m.verdict, m.deposit, m.totalCost, m.expected, m.net, m.netAfterYield, (m.breakEven ?? b.breakEvenOdds) ?? '', b.stopTvl, b.reviewDate].join(',');
+      return [r.rank, r.slug, `"${r.name.replace(/"/g, '""')}"`, r.category ?? '', b.chain, r.tvl_usd, r.change_7d ?? '', r.launch_odds, r.implied_value_usd, r.conditional_value_usd, m.verdict, m.deposit, m.totalCost, m.expected, m.net, m.netAfterYield, m.breakEvenOdds ?? '', m.stopTvl, m.reviewDate, m.minutes, m.netPerHour ?? ''].join(',');
     });
     const blob = new Blob([head + '\n' + lines.join('\n') + '\n'], { type: 'text/csv' });
     const a = document.createElement('a');

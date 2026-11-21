@@ -1,6 +1,7 @@
 import { farmPlan } from './farm.ts';
 import { cohortOdds, farmEconomics, ECON_DEFAULTS } from './economics.ts';
 import { insightFor } from './insight.ts';
+import { ablation, oddsBrier, bootstrap, coverage, accounting, productionAblation, nestedCoverage } from './evidence.ts';
 
 export interface Protocol {
   slug: string;
@@ -23,7 +24,7 @@ export interface Snapshot {
 }
 
 const DAY = 86_400_000;
-const MAX_VALUE = 100_000_000_000_000;
+export const MAX_VALUE = 100_000_000_000_000;
 export const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 export const lexical = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const positiveInt = (x: unknown) => Number.isSafeInteger(x) && Number(x) > 0;
@@ -68,8 +69,10 @@ const exchange = /^(?:Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\
 export function classify(p: Protocol, watch: Set<string>) {
   if (recorded(p)) return 'Recorded token';
   if (watch.has(p.slug)) return 'Watchlist';
-  if (product.test(p.category ?? '') || wrapped.test(p.name) || exchange.test(p.name)) return 'Product or exchange screen';
-  if (versioned.test(p.name)) return 'Versioned product screen';
+  if (product.test(p.category ?? '') || exchange.test(p.name)) return 'Product or exchange screen';
+  // Versioned deployments and staked forms of untokenized protocols are real
+  // farm targets, kept as a disclosed Off-list cohort instead of dropped.
+  if (versioned.test(p.name) || wrapped.test(p.name)) return 'Off-list';
   return 'Discovery';
 }
 
@@ -94,7 +97,7 @@ const capLog = (p: Protocol) => Math.log(p.mcap_usd!);
 
 // Ridge least squares on centered log TVL and clipped growth. Keep the growth
 // coefficient bounded, then re-solve intercept and slope with that coefficient.
-export function fitCurve(peers: Protocol[], growth = true, median = 0) {
+export function fitCurve(peers: Protocol[], growth = true, median = 0, tvl = true) {
   const n = peers.length;
   if (n < 2) throw new Error('Need at least two observations per refit.');
   const mean = (fn: (p: Protocol) => number) => peers.reduce((s, p) => s + fn(p), 0) / n;
@@ -105,6 +108,10 @@ export function fitCurve(peers: Protocol[], growth = true, median = 0) {
     xx += x * x; gg += g * g; xg += x * g; xy += x * y; gy += g * y;
   }
   const a = xx + 2, d = gg + 12;
+  if (!tvl) {
+    const momentum = growth ? clamp(gy / d, -0.25, 0.25) : 0;
+    return { intercept: my - momentum * mg, slope: 0, momentum, median };
+  }
   const momentum = growth ? clamp((a * gy - xg * xy) / (a * d - xg * xg), -0.25, 0.25) : 0;
   const slope = clamp((xy - xg * momentum) / a, 0, 1.5);
   return { intercept: my - slope * mx - momentum * mg, slope, momentum, median };
@@ -177,29 +184,7 @@ function validate(peers: Protocol[], asOf: string, median: number) {
   // errors of peers in adjacent tracking-age buckets (>=12 residuals), so the
   // range widens where the model actually knows less. Disclosed transfer, not
   // a calibrated pre-token outcome.
-  const ageBuckets = [
-    { label: '<180d', lo: 0, hi: 180 },
-    { label: '180-365d', lo: 180, hi: 365 },
-    { label: '1-2y', lo: 365, hi: 730 },
-    { label: '2-4y', lo: 730, hi: 1460 },
-    { label: '>4y', lo: 1460, hi: Infinity },
-  ];
-  const bucketOf = (age: number | null) => age === null ? -1 : ageBuckets.findIndex(b => age >= b.lo && age < b.hi);
-  const bucketErrors = ageBuckets.map((_, bi) => folds.filter((_, i) => bucketOf(trackingDays(peers[i], asOf)) === bi).map(f => Math.abs(f.growth)));
-  const ageBands = ageBuckets.map((b, bi) => {
-    const own = bucketErrors[bi];
-    const pool = own.length >= 12 ? own : [...own, ...(bucketErrors[bi - 1] ?? []), ...(bucketErrors[bi + 1] ?? [])];
-    const use = pool.length >= 8 ? pool : errors;
-    // Shrink the pooled band toward the global factor by sample weight, so a
-    // thin bucket never swings the range on three residuals alone.
-    const raw = Math.exp(quantile(use, 0.8));
-    const w = use.length / (use.length + 10);
-    return { label: b.label, n: own.length, pooled_n: use.length, factor: Math.exp(w * Math.log(raw) + (1 - w) * Math.log(factor)), global_fallback: use === errors };
-  });
-  const bandFor = (age: number | null) => {
-    const bi = bucketOf(age);
-    return bi >= 0 ? ageBands[bi].factor : factor;
-  };
+  const { age_bands: ageBands, bandFor } = ageBandPolicy(peers, asOf, errors, factor);
   const diagnostics = Object.fromEntries(variants.map(k => {
     const residuals = folds.map(f => f[k]);
     return [k, { n: peers.length, median_miss: miss[k],
@@ -216,6 +201,34 @@ function validate(peers: Protocol[], asOf: string, median: number) {
     comparisons: [paired('growth', 'tvl'), paired('full', 'growth'), paired('age', 'tvl'), paired('full', 'baseline')],
     design: 'Identical leave-one-token-out folds; fixed candidates, no tuning or model selection. One-date cross-sectional diagnostics, not a historical backtest.',
     limits: 'Overlapping training folds are dependent; paired counts are descriptive, not significance tests. Growth and age are retained as disclosed valuation sensitivities, not proven predictive improvements.' };
+}
+
+export function ageBandPolicy(peers: Protocol[], asOf: string, errors: number[], factor = Math.exp(quantile(errors, 0.8))) {
+  const ageBuckets = [
+    { label: '<180d', lo: 0, hi: 180 },
+    { label: '180-365d', lo: 180, hi: 365 },
+    { label: '1-2y', lo: 365, hi: 730 },
+    { label: '2-4y', lo: 730, hi: 1460 },
+    { label: '>4y', lo: 1460, hi: Infinity },
+  ];
+  const bucketOf = (age: number | null) => age === null ? -1 : ageBuckets.findIndex(b => age >= b.lo && age < b.hi);
+  const bucketErrors = ageBuckets.map((_, bi) => errors.filter((_, i) => bucketOf(trackingDays(peers[i], asOf)) === bi));
+  const ageBands = ageBuckets.map((b, bi) => {
+    const own = bucketErrors[bi];
+    const pool = own.length >= 12 ? own : [...own, ...(bucketErrors[bi - 1] ?? []), ...(bucketErrors[bi + 1] ?? [])];
+    const use = pool.length >= 8 ? pool : errors;
+    // Shrink the pooled band toward the global factor by sample weight, so a
+    // thin bucket never swings the range on three residuals alone.
+    const raw = Math.exp(quantile(use, 0.8));
+    const w = use.length / (use.length + 10);
+    return { label: b.label, n: own.length, pooled_n: use.length, factor: Math.exp(w * Math.log(raw) + (1 - w) * Math.log(factor)), global_fallback: use === errors };
+  });
+  const bandFor = (age: number | null) => {
+    const bi = bucketOf(age);
+    return bi >= 0 ? ageBands[bi].factor : factor;
+  };
+  const bucketLabel = (age: number | null) => ageBands[bucketOf(age)]?.label ?? 'Global fallback';
+  return { age_bands: ageBands, bandFor, bucketLabel };
 }
 
 // Walk-forward time split: fit the curve on the older half of dated traded
@@ -279,7 +292,7 @@ export function buildRadar(snapshot: Snapshot) {
   const { bandFor, ...validation } = validationRaw;
   const walk_forward = walkForward(peers, as_of, market_median_change_7d);
   const limits = [Math.min(...peers.map(p => p.tvl_usd)), Math.max(...peers.map(p => p.tvl_usd))];
-  const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery');
+  const candidates = classified.filter(({ status }) => status === 'Watchlist' || status === 'Discovery' || status === 'Off-list');
   const insightCtx = { median: market_median_change_7d, rankedTvls: candidates.map(({ p }) => p.tvl_usd).sort((a, b) => a - b), cohortRateFor: odds_cohort.oddsFor, asOf: as_of };
   const rows = candidates.map(({ p, status }) => {
     const factors = price(p, as_of, fit, premiums);
@@ -317,13 +330,28 @@ export function buildRadar(snapshot: Snapshot) {
     tvl_only_rank: alternate.findIndex(p => p.slug === r.slug) + 1,
     tvl_only_value: r.valuation_sensitivity.tvl_only }));
   const exclusions = classified.filter(({ p }) => !ranked.has(p.slug)).map(({ p, status }) => ({ ...p, reason: status }));
+  // Out-of-sample evidence pack: term ablation with a negative control, the
+  // odds model's Brier score, bootstrap coefficient/rank stability, honest
+  // interval coverage, and a full 758-protocol accounting reconciliation.
+  const term_ablation = ablation(peers, as_of, market_median_change_7d);
+  const odds_brier = oddsBrier(protocols, as_of);
+  const boot = bootstrap(peers, as_of, market_median_change_7d,
+    rows.map(r => ({ slug: r.slug, tvl_usd: r.tvl_usd, change_7d: r.change_7d, category: r.category, age_days: r.age_days, launch_odds: r.launch_odds })));
+  const interval_coverage = coverage(peers, as_of, market_median_change_7d, validation.factor);
+  const ledger = accounting(protocols, watch, ranked, classify, floor_usd);
+  const rowsWithRank = rows.map(r => ({ ...r, rank_range: boot.rank_range[r.slug] ?? [r.rank, r.rank] }));
+  const { rank_range: _rr, ...bootstrapSummary } = boot;
   return {
-    as_of, source, floor_usd, rows, peers, fit, market_median_change_7d, validation: { ...validation, top_rank_sensitivity: rankSensitivity, walk_forward }, exclusions, plan_audit,
+    as_of, source, floor_usd, rows: rowsWithRank, peers, fit, market_median_change_7d,
+    validation: { ...validation, top_rank_sensitivity: rankSensitivity, walk_forward, term_ablation, odds_brier, bootstrap: bootstrapSummary, interval_coverage,
+      production_ablation: productionAblation(peers, as_of), nested_coverage: nestedCoverage(protocols, peers, as_of) },
+    exclusions, plan_audit, ledger,
     odds_cohort: { buckets: odds_cohort.buckets, prior: odds_cohort.prior, disclosure: odds_cohort.disclosure },
     category_premiums: [...premiums.entries()].map(([category, v]) => ({ category, ...v })),
     econ_defaults: ECON_DEFAULTS,
     counts: { total: protocols.length, ranked: rows.length, watch: watch.size, covered: rows.filter(p => watch.has(p.slug)).length,
-      discovery: rows.length - watch.size, below: rows.filter(p => p.tvl_usd < floor_usd).length, recorded: live.length,
+      discovery: rows.filter(p => p.cohort === 'Discovery').length, offlist: rows.filter(p => p.cohort === 'Off-list').length,
+      below: rows.filter(p => p.tvl_usd < floor_usd).length, recorded: live.length,
       farm: rows.filter(p => p.verdict === 'FARM').length, thin: rows.filter(p => p.verdict === 'THIN').length, skip: rows.filter(p => p.verdict === 'SKIP').length },
   };
 }

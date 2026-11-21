@@ -1,25 +1,19 @@
 {
   "checks": [
-    "desktop board, watchlist coverage, keyboard skip and 5 complete rows at 1440x900",
-    "native dialog, Escape and focus return; renewal contrast FARM day 73 vs THIN day 7 both rendered",
-    "compare cap, removal and persistent selection",
-    "shared scenario propagation and invalid-input retention",
-    "empty state, clear, sector filter, verdict filter, net sort and self-audit strip",
-    "in-browser recompute exact on all rows; sliders re-price (48\u219278 FARM at $5K)",
-    "mobile 320/390 and tablet 768 search, filters, sort, dossier and no overflow",
-    "all 190 real protocol dossiers",
-    "file:// rendering with network offline"
+    "default unmodified 1440x900: 5 complete rows, chart visible, board y=470.6875; keyboard skip",
+    "authentic dossier capture; renewal contrast day 73 vs day 7; break-even present; Escape/focus return",
+    "compare cap and removal",
+    "joint capital/days/share/yield edits propagate to board, comparison, dossier, all 203 CSV rows and portfolio hours; reset",
+    "pool what-if propagation, sensitivity and invalid-input retention",
+    "empty/clear, sector/verdict filters, net sort and reachable filtered capture with model inputs",
+    "reachable evidence capture: all experiment/Brier/coverage tables and bootstrap in frame; scope and control signs verified",
+    "320/390/768px: search, chain/growth, dossier and expanded model/what-if/evidence without page overflow",
+    "all 203 dossiers reachable with complete timelines",
+    "file:// offline rendering; no external requests or JS errors"
   ],
   "complete_desktop_rows": 5,
+  "board_y": 470.6875,
   "screenshot_dimensions": {
-    "3-filtered.jpg": [
-      1440,
-      900
-    ],
-    "4-method.jpg": [
-      1440,
-      900
-    ],
     "1-board.jpg": [
       1440,
       900
@@ -27,14 +21,22 @@
     "2-detail.jpg": [
       1440,
       900
+    ],
+    "3-filtered.jpg": [
+      1440,
+      900
+    ],
+    "4-method.jpg": [
+      1440,
+      900
     ]
   },
-  "javascript_errors": [],
-  "external_requests": [],
   "screenshots": {
-    "3-filtered.jpg": 227419,
-    "4-method.jpg": 173891,
-    "1-board.jpg": 230284,
-    "2-detail.jpg": 279537
-  }
+    "1-board.jpg": 236985,
+    "2-detail.jpg": 271627,
+    "3-filtered.jpg": 219789,
+    "4-method.jpg": 233295
+  },
+  "javascript_errors": [],
+  "external_requests": []
 }
