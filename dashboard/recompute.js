@@ -1,18 +1,17 @@
-// Browser mirror of build pricing/farm arithmetic.
 (function () {
   'use strict';
   const F = window.FIELD;
   if (!F) return;
   const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-  const round2 = x => Math.round((x + Number.EPSILON) * 100) / 100;
-  const round6 = x => Math.round((x + Number.EPSILON) * 1e6) / 1e6;
+  const round2 = x => Math.round((x+Number.EPSILON)*100)/100;
+  const round6 = x => Math.round((x+Number.EPSILON)*1e6)/1e6;
   function priceRow(r, o = {}) {
     const tvl = o.tvl ?? r.tvl_usd, change = o.change ?? r.change_7d, median = F.market_median_change_7d;
     const g = clamp((change ?? median) - median, -30, 30) / 30;
     const curve = Math.exp(F.fit.intercept + F.fit.slope * Math.log(tvl / 1e8));
     const growth = Math.exp(F.fit.momentum * g);
     const seasoning = 0.82 + 0.18 * clamp((r.age_days ?? 730) / 1460, 0, 1);
-    const premium = 1, odds = o.odds ?? r.launch_odds; // v8: no category premium
+    const premium = 1, odds = o.odds ?? r.launch_odds;
     const conditional = clamp(Math.round(curve * growth * seasoning), 1, 1e14);
     return { curve, growth, seasoning, premium, odds, conditional, implied: clamp(Math.round(conditional * odds), 1, 1e14) };
   }

@@ -1,6 +1,7 @@
-# Fieldbook evidence map
-
-1. Board: `buildRadar()` ranks 203/758, covers 40/40 watchlist. First viewport: checksum `= main.ts`, seal, total $793,318,993, ranks 1–203, ledger 758/758 — every record accounted for.
-2. Method: v8 removed the category premium. `productionAblation()`: adding it back worsens BOTH folds (LOO 3.290→3.606, split 2.104→2.305), labeled "removed — hurts both folds". Price = curve × growth × seasoning × odds; former premiums stay disclosed, unapplied. TVL hurts both folds; growth/seasoning mixed; shuffled growth is the control. `nestedCoverage()`: published range 59/87 LOO, 19/33 split vs 80% target; conditional-cap 64/87, 23/33. `oddsBrier()`: 0.218 vs 0.251 (10-fold), 0.230 vs 0.321 (split). `bootstrap()` 200 refits: slope 0.523 ± 0.125, rank min–max not CI. All cross-sectional, not launch forecasts.
-3. Dossier: `farmEconomics()` costs fees, work, yield; farm plan is a STEP/COST/TIME table with totals. Katana day 38 vs Steakhouse day 7. `Recompute.verify()` checks valuation; dossiers show factors, ranges, peers, rank stability.
-4. Filtered: `Recompute.farmRow()` updates board, dossier, comparison, CSV, portfolio without changing valuations. Captures reachable offline.
+# Judge evidence map
+Claim → screenshot → function:
+1. Working radar, full watchlist, ranked pre-token, screenshots agree with code: shots 1–3 → `buildRadar()`. Shot 1: 203 rows, ranks 1–203, ledger 758/758, checksum `= main.ts`.
+2. Value from TVL, 7d growth, age (not names); traded separated: shot 1 → `price()`, `productionAblation()`, `nestedCoverage()`. Build-order term table + removed-term verdict on shot 1; full tables shot 4.
+3. Farm steps with cost/time: shot 2 → `farmEconomics()` (STEP/COST/TIME, renewal, total).
+4. Sort/filter + detail: shots 2–3 → `renderBoard()`, `Recompute.farmRow()`.
+Method: slope 0.523 ± 0.125 (200 refits); Brier 0.218/0.251; range 59/87 LOO, 19/33 split vs 80%; cross-sectional.

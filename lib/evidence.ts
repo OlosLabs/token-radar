@@ -127,7 +127,7 @@ export function productionAblation(peers: Protocol[], asOf: string) {
   const miss = (xs: number[][], i: number) => xs.length ? medianMiss(xs.map(x => x[i])) : null;
   return { loo_n: loo.length, train_n: train.length, split_n: split.length,
     rows: modes.map((term, i) => ({ term, loo: miss(loo, i), split: miss(split, i) })),
-    design: 'Fixed identical folds; fold-local median. The production model prices curve × growth × seasoning; the category-premium row adds the removed v7 term back. Removing TVL or growth refits the curve; seasoning is neutralized. Control permutes training growth and assigns held-out growth by a seeded slug draw from training. Odds excluded: target is traded conditional cap.' };
+    design: 'Fixed folds; local median. Production prices curve × growth × seasoning; category row adds back the removed v7 term. Removing TVL/growth refits the curve; seasoning neutralized; control permutes growth. Odds excluded: target is traded cap.' };
 }
 
 export function coverageFold(train: Protocol[], test: Protocol[], asOf: string, oddsUniverse: Protocol[] = train) {
@@ -173,7 +173,7 @@ export function nestedCoverage(protocols: Protocol[], peers: Protocol[], asOf: s
     conditional: { loo: count(loo, 'conditionalHit'), split: count(split, 'conditionalHit') },
     buckets: buckets.map(bucket => ({ bucket, loo: count(loo.filter(x => x.bucket === bucket)), split: count(split.filter(x => x.bucket === bucket)),
       conditional_loo: count(loo.filter(x => x.bucket === bucket), 'conditionalHit'), conditional_split: count(split.filter(x => x.bucket === bucket), 'conditionalHit') })),
-    design: 'Exact dossier-range policy: inner-LOO errors estimate bands; outer test rows are excluded from fits. Hits test the odds-weighted dossier range against traded caps; conditional-cap coverage shown separately. Cross-sectional diagnostics, not future-launch calibration.' };
+    design: 'Policy: inner-LOO errors set bands; outer test rows are excluded from fits. Hits test the odds-weighted dossier range vs traded caps; conditional-cap separate. Cross-sectional, not future-launch calibration.' };
 }
 
 export function ablation(peers: Protocol[], asOf: string, median: number) {
@@ -228,7 +228,7 @@ export function ablation(peers: Protocol[], asOf: string, median: number) {
     control_loo_delta: controlRow.loo_miss - modelRow.loo_miss,
     control_wf_delta: controlRow.wf_miss - modelRow.wf_miss,
     control_helps: controlRow.loo_miss < modelRow.loo_miss && controlRow.wf_miss < modelRow.wf_miss,
-    design: 'Candidate variants refit per LOO fold and tracking-date split, not a full-production ablation. Pass flags require both misses to improve; they do not select shipped terms. The board retains bounded growth, seasoning and category sensitivities. Control deltas compare to curve + growth, not the full shipped valuation.',
+    design: 'Variants refit per fold/split, not full-production. Pass flags require both misses to improve; no terms selected. Control vs curve+growth.',
   };
 }
 
@@ -277,7 +277,7 @@ export function oddsBrier(protocols: Protocol[], asOf: string) {
     n_peers: dated.length, n_launched: launched,
     tenfold: { n, model_brier: modelSq / n, base_brier: baseSq / n, model_called_right: modelRight / n, base_called_right: baseRight / n },
     walk_forward: { n: test.length, model_brier: wModelSq / test.length, base_brier: wBaseSq / test.length, model_called_right: wModelRight / test.length, base_called_right: wBaseRight / test.length },
-    design: 'Ten slug-ordered folds and an oldest-half/newest-half time split. The base rate is the training share with a recorded token; the model is the isotonic age curve refit on the same training rows. Brier: mean squared error of the probability, lower is better.',
+    design: 'Ten slug-ordered folds + oldest/newest split. Base rate = training share recorded; model = isotonic age curve refit. Brier = MSE of probability, lower better.',
   };
 }
 

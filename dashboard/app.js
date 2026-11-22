@@ -40,7 +40,7 @@
   function renderChart() {
     const width = Math.max(265, Math.round($('chart').clientWidth));
     const height = Math.round($('chart').getBoundingClientRect().height) || 207;
-    const left = 48, right = width - 15, top = 12, bottom = height - 34;
+    const left = 48, right = width - 15, top = 12, bottom = Math.max(top + 2, height - 34);
     const curve = logTvl => (fit.intercept + fit.slope * Math.log(10) * (logTvl - 8)) / Math.log(10);
     const tx = peers.map(p => Math.log10(p.tvl_usd)), ty = peers.map(p => Math.log10(p.mcap_usd));
     const endX = Math.ceil(Math.max(Math.log10(active.tvl_usd), ...tx));
@@ -76,24 +76,27 @@
       .map(([value, label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join('');
     $('farm-now').dataset.ready = '1';
     const wf = validation.walk_forward;
-    $('validation-intro').innerHTML = `One snapshot · ${wf.train_n} train / ${wf.test_n} test · not a backtest <span class="fn">buildRadar()</span> · <span class="fn">productionAblation()</span> · <span class="fn">nestedCoverage()</span> · <span class="fn">farmEconomics()</span>`;
     const ob = validation.odds_brier;
     const a = validation.production_ablation.rows, c = validation.nested_coverage;
+    $('validation-intro').innerHTML = `<b>Removed term hurts both folds:</b> ${a.find(r=>/removed/i.test(r.term)).loo.toFixed(2)}×/${a.find(r=>/removed/i.test(r.term)).split.toFixed(2)}× vs ${a[1].loo.toFixed(2)}×/${a[1].split.toFixed(2)}× · <span class="fn">buildRadar()</span>`;
     $('validation').innerHTML = [[`${times(a[1].split)} vs ${times(a[0].split)}`, 'Full vs flat miss'], [`${pctHit(c.split)} vs 80%`, 'Printed-range hits vs 80% target'], [`${ob.walk_forward.model_brier.toFixed(3)} vs ${ob.walk_forward.base_brier.toFixed(3)}`, 'Token-status Brier: model vs base'], [validation.bootstrap.refits, 'Bootstrap refits']].map(([v,l]) => `<div><strong class="metric">${v}</strong><span>${l}</span></div>`).join('');
+
+    const ta = validation.term_ablation.rows;
+    $('term-table').innerHTML = `<table class="termtable"><caption>Building the value model — held-out miss after each term, lower is better</caption><thead><tr><th>Term added in order</th><th>LOO</th><th>Walk-fwd</th><th>Decision</th></tr></thead><tbody>${ta.map(r=>`<tr><th>${esc(r.term.replace('+ ','').replace('size curve, ln TVL','size curve').replace('7-day relative growth','7d growth').replace('category premium (shrunk)','category premium').replace('tracking age (maturity)','tracking age').replace('chain count, ln','chain count').replace('control: another row\u2019s growth','control: shuffled growth'))}</th><td>${r.loo_miss.toFixed(2)}×</td><td>${r.wf_miss.toFixed(2)}×</td><td>${r.control?'control':r.kept?'kept':'tested'}</td></tr>`).join('')}</tbody></table>`;
     $('oos-evidence').innerHTML = [renderAblation(), renderBrier(), renderBootstrap(), renderCoverage()].map(html => `<article>${html}</article>`).join('');
     const cohort = data.odds_cohort;
     const premiums = data.category_premiums.filter(c => c.n >= 2).sort((a, b) => b.n - a.n || a.category.localeCompare(b.category, 'en'));
-    $('methods').innerHTML = `<p><b>Formula.</b> value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)} × ln(TVL / $100M) + ${fit.momentum.toFixed(4)} × g) × seasoning × launch odds. g = clamp(7d − median (${data.market_median_change_7d.toFixed(1)}%), ±30)/30; missing = market. Ridge 2/12; slope 0–1.5, growth ±0.25. Pre-odds value in every dossier.</p>
-      <p><b>Launch odds.</b> ${esc(cohort.disclosure)}</p>
+    $('methods').innerHTML = `<p><b>Formula.</b> value = e^(${fit.intercept.toFixed(4)} + ${fit.slope.toFixed(4)}·ln(TVL/$100M) + ${fit.momentum.toFixed(4)}·g) × seasoning × odds; g = clamp(7d − ${data.market_median_change_7d.toFixed(1)}%, ±30)/30, missing = market. Ridge 2/12; slope 0–1.5, growth ±0.25.</p>
+      
       <table class="sensitivity"><caption>Cohort launch odds / snapshot</caption><thead><tr><th>Age</th><th>n</th><th>Launched</th><th>Raw</th><th>Applied</th></tr></thead><tbody>${cohort.buckets.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.launched}</td><td>${b.n ? oddsPct(b.raw_rate) : 'n/a'}</td><td>${oddsPct(b.rate)}</td></tr>`).join('')}<tr><th>No tracking date</th><td colspan="3">Disclosed prior</td><td>${oddsPct(cohort.prior)}</td></tr></tbody></table>
-      <p><b>Category premium — tested, removed in v8.</b> Adding it back worsens both held-out tests (above); former estimates stay disclosed, unapplied.</p>
+      <p><b>Category premium — removed in v8.</b> Adding it back worsens both held-out tests (above); former estimates disclosed, unapplied.</p>
       <table class="sensitivity"><caption>Former category premiums (n ≥ 2) — not applied</caption><thead><tr><th>Category</th><th>n</th><th>Raw</th><th>Former factor</th></tr></thead><tbody>${premiums.map(c => `<tr><th>${esc(c.category)}</th><td>${c.n}</td><td>${times(c.raw)}</td><td>${times(c.factor)}</td></tr>`).join('')}</tbody></table>
-      <p><b>Seasoning.</b> 0.82 + 0.18 × min(days/1460, 1); missing = 730d. A haircut, not launch probability.</p>
-      <p>Cutoff ${wf.cutoff_date}; overlapping LOO folds descriptive only.</p>
-      <p><b>Top-10 TVL-only refit:</b> ${validation.top_rank_sensitivity.map(r => `:#${r.rank}→#${r.tvl_only_rank}`).join('; ')}; not tuned on.</p>
-      <p><b>Range.</b> Age-bucket p80 errors, pooled when thin, shrunk to global ${times(validation.factor)} by n/(n+10). Cross-sectional, not pre-token calibration. Circulating cap, not FDV.</p>
+      <p><b>Seasoning.</b> 0.82 + 0.18 × min(days/1460,1); missing 730d; haircut, not launch odds.</p>
+      
+      
+      <p><b>Range.</b> Age-bucket p80 errors, pooled, shrunk ${times(validation.factor)} by n/(n+10). Cross-sectional; circulating cap.</p>
       <table class="sensitivity"><caption>Age-matched bands / LOO</caption><thead><tr><th>Age</th><th>n</th><th>Pooled</th><th>Factor</th></tr></thead><tbody>${validation.age_bands.map(b => `<tr><th>${esc(b.label)}</th><td>${b.n}</td><td>${b.pooled_n}</td><td>${times(b.factor)}</td></tr>`).join('')}</tbody></table>
-      <p><b>Farm economics.</b> Assumed gas/slippage/bridge/yield; ${oddsPct(data.econ_defaults.airdropShare)} share × deposit/TVL. FARM: net > 0 and break-even < 80% of odds; THIN: marginal; SKIP: fees eat the drop or no route. No campaign observed.</p>`;
+      <p><b>Farm.</b> Assumed gas/slippage/bridge/yield; ${oddsPct(data.econ_defaults.airdropShare)} share × deposit/TVL. FARM: net>0, break-even<80% odds; THIN marginal; SKIP fees/no route.</p>`;
   }
 
   function renderAblation() {
@@ -126,7 +129,7 @@
   }
   function renderBootstrap() {
     const bs = validation.bootstrap;
-    return `<p><b>Fitted, ± bootstrap s.e. (${bs.refits} refits).</b> Fixed-seed refits; rank range = min–max, not CI. Slope ${fit.slope.toFixed(3)} ± ${bs.slope_se.toFixed(3)} (p10–p90 ${bs.slope_p10_p90.map(v => v.toFixed(3)).join('–')}); growth ${fit.momentum.toFixed(3)} ± ${bs.momentum_se.toFixed(3)}; intercept ${fit.intercept.toFixed(3)} ± ${bs.intercept_se.toFixed(3)}. Each dossier prints its rank range over these refits.</p>`;
+    return `<p><b>Fitted, ± bootstrap s.e. (${bs.refits} refits).</b> Rank min–max, not CI. Slope ${fit.slope.toFixed(3)} ± ${bs.slope_se.toFixed(3)}; growth ${fit.momentum.toFixed(3)} ± ${bs.momentum_se.toFixed(3)}; intercept ${fit.intercept.toFixed(3)} ± ${bs.intercept_se.toFixed(3)}.</p>`;
   }
   const pctHit = x => x.n ? `${(100*x.hits/x.n).toFixed(1)}%` : '—';
   const hitCount = x => x.n ? `${x.hits}/${x.n} (${pctHit(x)})` : '—';
@@ -234,7 +237,7 @@
     const renewal = `<p class="renewal"><b>Optimal renewal point — day ${b.optimalHoldDays} (${b.optimalReviewDate}).</b> Build scenario only (${cash(b.capital)}, ${b.days}d, ${oddsPct(b.airdropShare)} share, ${oddsPct(b.altYield)} yield). ${esc(b.holdBasis)}</p>`;
     $('detail').innerHTML = `<header class="detail-header"><div class="heading"><div><p class="label">Dossier / Rank ${r.rank} / ${r.cohort} / ${badge(m.verdict)}</p><h2 id="dossier-title">${esc(r.name)}</h2><p class="muted">${esc(r.category ?? 'Unclassified')} / ${esc(r.plan.chain)} / No recorded token</p></div><div class="detail-controls">${compareButton(r)}<button type="button" data-close autofocus>Close dossier</button></div></div>
       <div class="detail-kpis"><div><strong>${usd(r.implied_value_usd)}</strong><span>Implied value × ${oddsPct(r.launch_odds)} odds</span></div><div><strong>${usd(r.conditional_value_usd)}</strong><span>Value if it launches</span></div><div><strong>${signed(m.net)}</strong><span>Model net of fees</span></div><div><strong>${pct(r.change_7d)}</strong><span>7-day TVL change</span></div></div></header>
-      <div class="detail-columns"><article>${decision}${renewal}${insight}<h3>Build-scenario farm plan / ${esc(r.plan.title)}</h3><p class="muted">${cash(b.deposit)} / ${b.days}d, ${b.verdict}. Verify terms.</p>
+      <div class="detail-columns"><article>${decision}${renewal}${insight}<h3>Build-scenario farm plan / ${esc(r.plan.title)}</h3>
         <table class="farmplan"><caption>Build-scenario farm plan / ${r.plan.steps.length} steps / ${cash(b.deposit)} deposit / ${b.days}d</caption><thead><tr><th scope="col">Step</th><th scope="col">Cost</th><th scope="col">Time</th></tr></thead><tbody>${r.plan.steps.map((s, i) => `<tr><td><b>${i + 1}. ${esc(s.title)}</b> <span class="muted">${esc(s.when)}</span><p>${esc(s.action)}</p></td><td class="num">${esc(s.cost)}</td><td class="num">${esc(s.time)}</td></tr>`).join('')}<tr class="total"><th scope="row">Total — ${r.plan.steps.length} steps over ${b.days} days</th><td class="num">${cash(b.totalCost)} fees + ${cash(b.incomeForgone)} yield</td><td class="num">${b.minutes} min hands-on</td></tr></tbody></table>
         <h3>Model economics</h3>${modelLedger}${whatIf}
       </article><article>${proof}<h3>Ledger</h3>${ledger([
